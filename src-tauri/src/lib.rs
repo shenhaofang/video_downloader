@@ -1,5 +1,6 @@
 pub mod config;
 pub mod errors;
+pub mod media;
 pub mod models;
 pub mod storage;
 
