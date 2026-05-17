@@ -244,7 +244,7 @@ Settings tab:
 
 The UI should stay compact and operational. Do not build a marketing landing page or a full admin console.
 
-Navigation buttons must keep their labels on one line across desktop and narrow layouts. The narrow top-nav layout should allocate enough button width for four Chinese characters such as `下载任务`.
+Navigation buttons must keep their labels on one line across desktop and narrow layouts. The narrow top-nav layout should allocate enough button width for four Chinese characters such as `下载任务`, and it should wrap the top bar instead of showing a horizontal scrollbar inside the nav.
 
 ## Error Handling
 
