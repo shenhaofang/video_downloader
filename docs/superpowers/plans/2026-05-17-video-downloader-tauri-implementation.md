@@ -30,8 +30,11 @@ Create the app at repository root:
 - `frontend/src/styles.css`: production CSS derived from reviewed prototype.
 - `frontend/src/*.test.ts`: frontend unit tests.
 - `src-tauri/Cargo.toml`: Rust crate configuration.
+- `src-tauri/Cargo.lock`: Rust app dependency lockfile.
 - `src-tauri/tauri.conf.json`: Tauri app config and bundled binaries.
+- `src-tauri/icons/icon.ico`: minimal Windows app icon required by Tauri context generation.
 - `src-tauri/capabilities/default.json`: Tauri shell/dialog permissions.
+- `src-tauri/gen/`: ignored Tauri-generated schema output.
 - `src-tauri/src/lib.rs`: Tauri app bootstrap.
 - `src-tauri/src/main.rs`: desktop binary entrypoint.
 - `src-tauri/src/models.rs`: shared domain models.
@@ -60,10 +63,18 @@ Create the app at repository root:
 - Create: `frontend/src/main.ts`
 - Create: `frontend/src/styles.css`
 - Create: `src-tauri/Cargo.toml`
+- Create: `src-tauri/Cargo.lock`
 - Create: `src-tauri/src/main.rs`
 - Create: `src-tauri/src/lib.rs`
 - Create: `src-tauri/tauri.conf.json`
+- Create: `src-tauri/icons/icon.ico`
 - Create: `src-tauri/capabilities/default.json`
+- Modify: `.gitignore`
+
+**Support files:**
+- Track `src-tauri/Cargo.lock` because this is an application crate and the lockfile makes Rust dependency resolution reproducible.
+- Track `src-tauri/icons/icon.ico` so Windows Tauri context generation has a valid icon asset during `cargo check`.
+- Ignore `src-tauri/gen/`; it is generated schema output recreated by Tauri/Cargo and is not part of the scaffold source.
 
 - [ ] **Step 1: Create package metadata and scripts**
 
@@ -278,7 +289,7 @@ Expected: frontend build succeeds and Rust crate type-checks.
 - [ ] **Step 7: Commit scaffold**
 
 ```powershell
-git add package.json package-lock.json index.html frontend src-tauri
+git add .gitignore package.json package-lock.json index.html frontend src-tauri
 git commit -m "feat: scaffold tauri desktop app"
 ```
 
