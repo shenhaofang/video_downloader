@@ -226,12 +226,13 @@ Downloads tab:
 
 The Downloads tab must not show an engine selector for task creation. Engine selection is centralized in Settings.
 
-Login area:
+Login tab:
 
-- bilibili login status.
-- QR-code login.
-- Re-validate login state.
-- Clear login state.
+- Platform login status list.
+- Each platform row shows platform name, login status, and storage mode.
+- Expanding a platform row shows platform-specific details.
+- For bilibili, expanded details include QR-code login, re-validate login state, and clear login state.
+- The first release only enables bilibili, but the UI structure must support adding more platform rows later.
 
 Settings tab:
 
@@ -288,6 +289,7 @@ Before calling the first release complete, verify:
 - Bundled `ffmpeg` and `ffprobe` are detected and used.
 - Task logs can be expanded in the UI.
 - Collection task details show every child video's name, output file, download progress, and retry count.
+- Login tab shows a platform login status list, with bilibili details available only after expanding that platform row.
 - Files are written under the configured root directory using the expected naming scheme.
 - Invalid filenames and conflicts are handled without overwriting existing files.
 

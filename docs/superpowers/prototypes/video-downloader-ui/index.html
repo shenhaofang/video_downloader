@@ -540,6 +540,49 @@
       flex-wrap: wrap;
     }
 
+    .platform-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .platform-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .platform-summary {
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) 120px 120px auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+    }
+
+    .platform-title strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .platform-title span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .platform-detail {
+      display: none;
+      border-top: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 14px;
+    }
+
+    .platform-card.open .platform-detail {
+      display: block;
+    }
+
     .toast {
       position: fixed;
       right: 22px;
@@ -620,6 +663,10 @@
       }
 
       .task-main {
+        grid-template-columns: 1fr;
+      }
+
+      .platform-summary {
         grid-template-columns: 1fr;
       }
 
@@ -815,19 +862,34 @@
 
         <div class="two-col">
           <div class="panel">
-            <h2>bilibili</h2>
-            <div class="login-layout">
-              <div class="qr" id="qrBox">QR</div>
-              <div class="settings-grid" style="flex: 1; min-width: 240px;">
-                <div class="detail-item"><span>状态</span><strong id="loginStatus">未登录</strong></div>
-                <div class="detail-item"><span>保存方式</span><strong>本地加密文件</strong></div>
-                <div class="detail-item"><span>最近验证</span><strong id="loginChecked">无</strong></div>
-                <div style="display:flex; gap: 8px; flex-wrap: wrap;">
-                  <button id="loginBtn" class="primary" type="button">模拟扫码成功</button>
-                  <button id="validateLogin" type="button">重新验证</button>
-                  <button id="clearLogin" class="danger" type="button">清除登录态</button>
+            <h2>平台登录状态</h2>
+            <div class="platform-list">
+              <article class="platform-card open" data-platform="bilibili">
+                <div class="platform-summary">
+                  <div class="platform-title">
+                    <strong>bilibili</strong>
+                    <span>用于探测和下载登录后可见的清晰度</span>
+                  </div>
+                  <span id="loginStatusPill" class="pill amber">未登录</span>
+                  <span>本地加密文件</span>
+                  <button class="icon-btn" data-action="toggle-platform" title="展开登录详情" type="button">▾</button>
                 </div>
-              </div>
+                <div class="platform-detail">
+                  <div class="login-layout">
+                    <div class="qr" id="qrBox">QR</div>
+                    <div class="settings-grid" style="flex: 1; min-width: 240px;">
+                      <div class="detail-item"><span>状态</span><strong id="loginStatus">未登录</strong></div>
+                      <div class="detail-item"><span>保存方式</span><strong>本地加密文件</strong></div>
+                      <div class="detail-item"><span>最近验证</span><strong id="loginChecked">无</strong></div>
+                      <div style="display:flex; gap: 8px; flex-wrap: wrap;">
+                        <button id="loginBtn" class="primary" type="button">模拟扫码成功</button>
+                        <button id="validateLogin" type="button">重新验证</button>
+                        <button id="clearLogin" class="danger" type="button">清除登录态</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </article>
             </div>
           </div>
 
@@ -932,6 +994,9 @@
       document.querySelector("#sideConcurrency").textContent = state.concurrency;
       document.querySelector("#sideLogin").textContent = state.loggedIn ? "已登录" : "未登录";
       document.querySelector("#loginStatus").textContent = state.loggedIn ? "已登录，Cookie 已加密保存" : "未登录";
+      const loginStatusPill = document.querySelector("#loginStatusPill");
+      loginStatusPill.textContent = state.loggedIn ? "已登录" : "未登录";
+      loginStatusPill.className = state.loggedIn ? "pill green" : "pill amber";
       document.querySelector("#loginChecked").textContent = state.loggedIn ? "刚刚" : "无";
     }
 
@@ -960,6 +1025,11 @@
         task.classList.add("open");
         showToast("已创建换内核重试任务");
       }
+    });
+
+    document.querySelector(".platform-list").addEventListener("click", (event) => {
+      if (event.target.dataset.action !== "toggle-platform") return;
+      event.target.closest(".platform-card").classList.toggle("open");
     });
 
     document.querySelector("#addTask").addEventListener("click", () => {
