@@ -229,7 +229,7 @@ The Downloads tab must not show an engine selector for task creation. Engine sel
 Login tab:
 
 - Platform login status list.
-- Each platform row shows only platform name and login status.
+- Each platform row is a single line with platform name on the left and a short login status on the right.
 - Clicking a platform row expands platform-specific details below it.
 - For bilibili, expanded details include QR-code login, re-validate login state, and clear login state.
 - The first release only enables bilibili, but the UI structure must support adding more platform rows later.

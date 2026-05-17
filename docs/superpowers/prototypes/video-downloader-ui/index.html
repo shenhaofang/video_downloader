@@ -554,7 +554,7 @@
 
     .platform-summary {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) 100px;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
       align-items: center;
       padding: 14px;
@@ -564,6 +564,9 @@
     .platform-title strong {
       display: block;
       font-size: 15px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .platform-title span {
@@ -668,7 +671,7 @@
       }
 
       .platform-summary {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr) auto;
       }
 
       .task-actions {
