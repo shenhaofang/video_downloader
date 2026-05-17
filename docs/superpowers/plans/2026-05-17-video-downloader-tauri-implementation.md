@@ -501,7 +501,8 @@ Run:
 
 ```powershell
 cd src-tauri
-cargo test models errors
+cargo test models
+cargo test errors
 ```
 
 Expected: all model and error tests pass.
