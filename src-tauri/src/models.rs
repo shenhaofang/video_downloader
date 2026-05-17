@@ -79,6 +79,7 @@ mod tests {
     #[test]
     fn app_config_defaults_match_spec() {
         let config = AppConfig::default();
+        assert_eq!(config.download_root, "D:\\Videos");
         assert_eq!(config.concurrency, 2);
         assert_eq!(config.default_engine, DownloadEngine::Native);
         assert!(config.ytdlp_path.is_none());
