@@ -1,3 +1,4 @@
+use crate::config::{normalize_concurrency, normalize_persisted_concurrency};
 use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::models::{AppConfig, DownloadEngine, DownloadTask, TaskGroup, TaskState};
 use chrono::Utc;
@@ -55,7 +56,7 @@ impl Storage {
 
         Ok(AppConfig {
             download_root: row.get("download_root"),
-            concurrency: row.get::<i64, _>("concurrency") as u8,
+            concurrency: normalize_persisted_concurrency(row.get("concurrency")),
             default_engine: parse_engine(&row.get::<String, _>("default_engine")),
             ytdlp_path: row.get("ytdlp_path"),
         })
@@ -66,7 +67,7 @@ impl Storage {
             "INSERT INTO app_config (id, download_root, concurrency, default_engine, ytdlp_path) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET download_root = excluded.download_root, concurrency = excluded.concurrency, default_engine = excluded.default_engine, ytdlp_path = excluded.ytdlp_path",
         )
         .bind(&config.download_root)
-        .bind(config.concurrency as i64)
+        .bind(normalize_concurrency(config.concurrency) as i64)
         .bind(engine_name(config.default_engine))
         .bind(&config.ytdlp_path)
         .execute(&self.pool)
@@ -170,11 +171,13 @@ mod tests {
     use super::Storage;
     use crate::models::{AppConfig, DownloadEngine, DownloadTask, TaskGroup, TaskState};
     use chrono::Utc;
+    use std::path::PathBuf;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn missing_config_creates_and_saves_default_config() {
-        let storage = Storage::open("sqlite::memory:").await.unwrap();
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
 
         let config = storage.load_config().await.unwrap();
         let saved = storage.load_config().await.unwrap();
@@ -185,11 +188,14 @@ mod tests {
         assert_eq!(saved.download_root, config.download_root);
         assert_eq!(saved.concurrency, config.concurrency);
         assert_eq!(saved.default_engine, config.default_engine);
+
+        db.close().await;
     }
 
     #[tokio::test]
     async fn save_and_load_config_round_trips_settings() {
-        let storage = Storage::open("sqlite::memory:").await.unwrap();
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
         let config = AppConfig {
             download_root: String::from("E:\\Downloads"),
             concurrency: 7,
@@ -204,11 +210,61 @@ mod tests {
         assert_eq!(loaded.concurrency, config.concurrency);
         assert_eq!(loaded.default_engine, config.default_engine);
         assert_eq!(loaded.ytdlp_path, config.ytdlp_path);
+
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn save_config_persists_normalized_concurrency() {
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
+        let config = AppConfig {
+            concurrency: 99,
+            ..AppConfig::default()
+        };
+
+        storage.save_config(&config).await.unwrap();
+        let loaded = storage.load_config().await.unwrap();
+        let stored_concurrency: i64 =
+            sqlx::query_scalar("SELECT concurrency FROM app_config WHERE id = 1")
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap();
+
+        assert_eq!(loaded.concurrency, 8);
+        assert_eq!(stored_concurrency, 8);
+
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn load_config_clamps_untrusted_persisted_concurrency() {
+        for (raw, expected) in [(-1_i64, 1_u8), (300_i64, 8_u8)] {
+            let db = TestDatabase::open().await;
+            let storage = &db.storage;
+
+            sqlx::query(
+                "INSERT INTO app_config (id, download_root, concurrency, default_engine, ytdlp_path) VALUES (1, ?, ?, ?, NULL)",
+            )
+            .bind("D:\\Videos")
+            .bind(raw)
+            .bind("native")
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+            let loaded = storage.load_config().await.unwrap();
+
+            assert_eq!(loaded.concurrency, expected);
+
+            db.close().await;
+        }
     }
 
     #[tokio::test]
     async fn inserts_group_task_and_log() {
-        let storage = Storage::open("sqlite::memory:").await.unwrap();
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
         let group = TaskGroup {
             id: Uuid::new_v4(),
             source_url: String::from("https://www.bilibili.com/video/BV1xx411c7mD"),
@@ -239,5 +295,58 @@ mod tests {
         storage.insert_group(&group).await.unwrap();
         storage.insert_task(&task).await.unwrap();
         storage.append_log(task.id, "[task] queued").await.unwrap();
+
+        db.close().await;
+    }
+
+    struct TestDatabase {
+        storage: Storage,
+        path: PathBuf,
+    }
+
+    impl TestDatabase {
+        async fn open() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("video-downloader-{}.sqlite", Uuid::new_v4()));
+            let database_url = format!(
+                "sqlite://{}?mode=rwc",
+                path.to_string_lossy().replace('\\', "/")
+            );
+            let storage = Storage::open(&database_url).await.unwrap();
+
+            Self { storage, path }
+        }
+
+        async fn close(self) {
+            let path = self.path;
+            self.storage.pool.close().await;
+            drop(self.storage);
+            remove_files(&path);
+        }
+    }
+
+    fn remove_files(path: &std::path::Path) {
+        let files = [
+            path.to_path_buf(),
+            path.with_extension("sqlite-shm"),
+            path.with_extension("sqlite-wal"),
+        ];
+
+        for _ in 0..100 {
+            let mut blocked = false;
+            for file in &files {
+                match std::fs::remove_file(file) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => blocked = true,
+                }
+            }
+
+            if !blocked {
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
