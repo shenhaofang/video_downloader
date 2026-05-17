@@ -1,5 +1,7 @@
+pub mod config;
 pub mod errors;
 pub mod models;
+pub mod storage;
 
 pub fn run() {
     tauri::Builder::default()

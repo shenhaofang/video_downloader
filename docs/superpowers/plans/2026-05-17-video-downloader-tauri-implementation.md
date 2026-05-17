@@ -734,7 +734,6 @@ pub mod storage;
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .run(tauri::generate_context!())
         .expect("failed to run video downloader");
 }
@@ -773,7 +772,8 @@ Run:
 
 ```powershell
 cd src-tauri
-cargo test storage config
+cargo test storage
+cargo test config
 ```
 
 Expected: storage and config tests pass.
