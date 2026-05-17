@@ -204,7 +204,7 @@
 
     .link-form {
       display: grid;
-      grid-template-columns: minmax(260px, 1fr) auto;
+      grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.85fr) auto;
       gap: 10px;
       align-items: end;
     }
@@ -212,6 +212,12 @@
     .field {
       display: grid;
       gap: 6px;
+    }
+
+    .path-picker {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
     }
 
     label {
@@ -571,6 +577,13 @@
               <label for="videoUrl">视频链接</label>
               <input id="videoUrl" value="https://www.bilibili.com/video/BV1xx411c7mD" aria-label="视频链接">
             </div>
+            <div class="field">
+              <label for="outputDir">输出目录</label>
+              <div class="path-picker">
+                <input id="outputDir" value="D:\Videos\bilibili" aria-label="输出目录">
+                <button id="selectOutputDir" type="button">选择</button>
+              </div>
+            </div>
             <button id="addTask" class="primary" type="button">添加下载</button>
           </div>
         </div>
@@ -773,6 +786,7 @@
     const state = {
       engine: "native",
       concurrency: 2,
+      outputRoot: "D:\\Videos",
       loggedIn: false,
       ytdlpInstalled: false,
       taskCounter: 4
@@ -824,8 +838,13 @@
 
     document.querySelector("#addTask").addEventListener("click", () => {
       const url = document.querySelector("#videoUrl").value.trim();
+      const outputDir = document.querySelector("#outputDir").value.trim();
       if (!url) {
         showToast("请输入 bilibili 链接");
+        return;
+      }
+      if (!outputDir) {
+        showToast("请选择输出目录");
         return;
       }
       const article = document.createElement("article");
@@ -834,7 +853,7 @@
         <div class="task-main">
           <div class="task-title">
             <strong>新任务 ${state.taskCounter}: 待解析 bilibili 链接</strong>
-            <span>${url}</span>
+            <span>${outputDir}</span>
           </div>
           <span class="pill amber">排队</span>
           <span>待探测</span>
@@ -847,7 +866,7 @@
         <div class="task-detail">
           <div class="detail-grid">
             <div class="detail-item"><span>登录态</span><strong>${state.loggedIn ? "可用" : "未登录"}</strong></div>
-            <div class="detail-item"><span>输出目录</span><strong>D:\\Videos\\bilibili</strong></div>
+            <div class="detail-item"><span>输出目录</span><strong>${outputDir}</strong></div>
             <div class="detail-item"><span>默认内核</span><strong>${state.engine}</strong></div>
             <div class="detail-item"><span>状态</span><strong>等待并发槽位</strong></div>
           </div>
@@ -860,6 +879,11 @@
       const queued = document.querySelector("#metricQueued");
       queued.textContent = String(Number(queued.textContent) + 1);
       showToast("任务已添加，使用当前设置中的默认内核");
+    });
+
+    document.querySelector("#selectOutputDir").addEventListener("click", () => {
+      document.querySelector("#outputDir").value = "E:\\Downloads\\bilibili";
+      showToast("已模拟选择本次任务输出目录");
     });
 
     document.querySelectorAll("[data-engine]").forEach((button) => {
@@ -876,6 +900,11 @@
       const value = Math.max(1, Math.min(8, Number(event.target.value || 1)));
       state.concurrency = value;
       updateSideStatus();
+    });
+
+    document.querySelector("#downloadRoot").addEventListener("input", (event) => {
+      state.outputRoot = event.target.value || "D:\\Videos";
+      document.querySelector("#outputDir").value = state.outputRoot.replace(/[\\\/]$/, "") + "\\bilibili";
     });
 
     document.querySelector("#loginBtn").addEventListener("click", () => {

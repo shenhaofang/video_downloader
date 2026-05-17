@@ -11,6 +11,7 @@ First release goals:
 - Download bilibili single videos.
 - Download bilibili multi-part videos, collections, or list-like links when supported by the selected engine.
 - Save final `.mp4` files directly to a user-selected local directory.
+- Allow choosing an output directory when creating a download task, prefilled from the default download root.
 - Use the highest available quality by default.
 - Support bilibili QR-code login.
 - Persist login state in a local encrypted file.
@@ -140,10 +141,10 @@ Use SQLite for durable task data.
 
 Core entities:
 
-- `TaskGroup`: one user submission.
+- `TaskGroup`: one user submission, including the output directory chosen for that submission.
 - `DownloadTask`: one actual downloadable item, such as one video or one part.
 - `TaskLog`: append-only task logs.
-- `AppConfig`: settings such as download root, concurrency, and default engine.
+- `AppConfig`: settings such as default download root, concurrency, and default engine.
 - `SessionState`: encrypted file-backed session data, not a SQLite cookie record.
 
 Task states:
@@ -175,12 +176,14 @@ Restart behavior:
 
 ## File Output
 
-The user configures a download root directory.
+The user configures a default download root directory in Settings.
+
+When creating a task, the Downloads tab also shows an output directory picker. It is prefilled from the default download root, but the user can override it for that task. The selected directory is saved on the `TaskGroup` and is used for every child `DownloadTask` created from that submission.
 
 Default output layout:
 
 ```text
-<download-root>/bilibili/<collection-or-video-title>/<index> - <video-title>.mp4
+<selected-output-directory>/bilibili/<collection-or-video-title>/<index> - <video-title>.mp4
 ```
 
 Rules:
@@ -209,6 +212,7 @@ The prototype is a low-fidelity design artifact. It confirms layout, task intera
 Downloads tab:
 
 - Link input.
+- Output directory picker, prefilled from the Settings default download root.
 - Add download button.
 - Task groups and child tasks.
 - Status, title, quality, login usage, output path, failure reason, and actual engine used.
@@ -229,7 +233,7 @@ Login area:
 
 Settings tab:
 
-- Download root directory picker.
+- Default download root directory picker.
 - Concurrency setting, default 2.
 - Default engine setting, default `native`.
 - `yt-dlp` status, version, path, and download/install action.
@@ -274,7 +278,9 @@ Before calling the first release complete, verify:
 - The encrypted bilibili session persists after restart and is verified on startup.
 - Interrupted tasks are marked `interrupted` and can be retried.
 - The Downloads tab does not expose a task-level engine selector.
+- The Downloads tab exposes an output directory picker for the task being created.
 - Changing the default engine in Settings affects newly created tasks.
+- Changing the default download root in Settings updates the prefilled task output directory.
 - A failed task can be retried with the other engine when applicable.
 - Missing `yt-dlp` triggers the on-demand install/download path.
 - Bundled `ffmpeg` and `ffprobe` are detected and used.
