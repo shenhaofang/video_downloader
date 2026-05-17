@@ -50,9 +50,9 @@ describe("renderApp", () => {
 
     const tabs = root.querySelectorAll(".nav button");
     expect([...tabs].map((button) => button.textContent?.trim())).toEqual([
-      "Downloads",
-      "Login",
-      "Settings",
+      "下载任务",
+      "登录状态",
+      "设置",
     ]);
     expect(root.querySelector(".boot-screen")).toBeNull();
   });
@@ -75,6 +75,17 @@ describe("renderApp", () => {
     expect(summary?.textContent).toContain("未登录");
     expect(summary?.querySelector("[data-testid='platform-name']")?.textContent).toBe("bilibili");
     expect(summary?.querySelector("[data-testid='platform-status']")?.textContent).toBe("未登录");
+  });
+
+  test("shows local encrypted file copy in expanded platform detail", () => {
+    renderApp(root, createInitialState());
+    root.querySelector<HTMLButtonElement>("[data-tab='login']")?.click();
+
+    root.querySelector<HTMLButtonElement>(".platform-summary")?.click();
+
+    const detail = root.querySelector<HTMLElement>(".platform-detail");
+    expect(detail?.hidden).toBe(false);
+    expect(detail?.textContent).toContain("本地加密文件");
   });
 
   test("renders created collection children with output, progress, and retries", async () => {

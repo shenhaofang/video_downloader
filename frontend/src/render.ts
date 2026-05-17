@@ -37,9 +37,9 @@ function buildAppShell(
   panels.append(downloads, login, settings);
 
   const tabs: Array<[TabId, string]> = [
-    ["downloads", "Downloads"],
-    ["login", "Login"],
-    ["settings", "Settings"],
+    ["downloads", "下载任务"],
+    ["login", "登录状态"],
+    ["settings", "设置"],
   ];
 
   for (const [tabId, label] of tabs) {
@@ -172,7 +172,11 @@ function buildLoginPanel(state: AppState): HTMLElement {
     shortStatus.dataset.testid = "platform-status";
     summary.append(name, shortStatus);
 
-    const detail = element("div", "platform-detail", "后续任务会在这里接入扫码或 Cookie 登录。");
+    const detail = element(
+      "div",
+      "platform-detail",
+      "后续任务会在这里接入扫码或 Cookie 登录，凭据将保存为本地加密文件。",
+    );
     detail.hidden = !state.expandedPlatforms.has(row.platform);
     summary.addEventListener("click", () => {
       if (state.expandedPlatforms.has(row.platform)) {
