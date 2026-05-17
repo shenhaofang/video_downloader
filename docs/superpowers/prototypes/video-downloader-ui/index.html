@@ -554,10 +554,11 @@
 
     .platform-summary {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) 120px 120px auto;
+      grid-template-columns: minmax(160px, 1fr) 100px;
       gap: 12px;
       align-items: center;
       padding: 14px;
+      cursor: pointer;
     }
 
     .platform-title strong {
@@ -868,11 +869,8 @@
                 <div class="platform-summary">
                   <div class="platform-title">
                     <strong>bilibili</strong>
-                    <span>用于探测和下载登录后可见的清晰度</span>
                   </div>
                   <span id="loginStatusPill" class="pill amber">未登录</span>
-                  <span>本地加密文件</span>
-                  <button class="icon-btn" data-action="toggle-platform" title="展开登录详情" type="button">▾</button>
                 </div>
                 <div class="platform-detail">
                   <div class="login-layout">
@@ -1028,8 +1026,9 @@
     });
 
     document.querySelector(".platform-list").addEventListener("click", (event) => {
-      if (event.target.dataset.action !== "toggle-platform") return;
-      event.target.closest(".platform-card").classList.toggle("open");
+      const summary = event.target.closest(".platform-summary");
+      if (!summary) return;
+      summary.closest(".platform-card").classList.toggle("open");
     });
 
     document.querySelector("#addTask").addEventListener("click", () => {
