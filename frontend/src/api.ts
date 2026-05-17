@@ -59,12 +59,16 @@ export async function listPlatformLogins(): Promise<PlatformLoginRow[]> {
 }
 
 function isTauriUnavailable(error: unknown): boolean {
+  const hasRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (hasRuntime) {
+    return false;
+  }
+
   const message = error instanceof Error ? error.message : String(error);
   return (
     typeof window === "undefined" ||
     !("__TAURI_INTERNALS__" in window) ||
-    message.includes("__TAURI_INTERNALS__") ||
-    message.includes("not available")
+    message.includes("__TAURI_INTERNALS__")
   );
 }
 
