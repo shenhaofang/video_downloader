@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Downloader Prototype</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --line: #d8dee9;
+      --line-strong: #b6c0cf;
+      --text: #1f2937;
+      --muted: #667085;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --green: #138a55;
+      --green-soft: #e9f8ef;
+      --amber: #a15c00;
+      --amber-soft: #fff4df;
+      --red: #c2413a;
+      --red-soft: #fff0ee;
+      --shadow: 0 12px 35px rgba(15, 23, 42, 0.08);
+      color-scheme: light;
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background: var(--bg);
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #eef2f7;
+      color: var(--text);
+      cursor: pointer;
+      min-height: 36px;
+    }
+
+    button:hover {
+      border-color: var(--line-strong);
+      background: #e5ebf4;
+    }
+
+    button.primary {
+      background: var(--blue);
+      color: #fff;
+      border-color: var(--blue);
+    }
+
+    button.primary:hover {
+      background: #1d4ed8;
+    }
+
+    button.danger {
+      color: var(--red);
+      background: var(--red-soft);
+      border-color: #ffd2cc;
+    }
+
+    input,
+    select {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--text);
+      width: 100%;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: #111827;
+      color: #f9fafb;
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 7px;
+      background: #2dd4bf;
+      color: #082f49;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #cbd5e1;
+      text-align: left;
+    }
+
+    .nav button.active {
+      color: #fff;
+      background: #1f2937;
+      border-color: #374151;
+    }
+
+    .side-status {
+      margin-top: auto;
+      display: grid;
+      gap: 10px;
+      color: #cbd5e1;
+      font-size: 13px;
+    }
+
+    .side-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 24px 28px;
+    }
+
+    .view {
+      display: none;
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .page-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0 0 4px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .toolbar {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .link-form {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 13px;
+      color: #475467;
+      font-weight: 600;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+      margin: 16px 0;
+    }
+
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 2px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .task-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .task {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .task-main {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) 130px 110px 120px auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px 16px;
+    }
+
+    .task-title {
+      min-width: 0;
+    }
+
+    .task-title strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 15px;
+    }
+
+    .task-title span {
+      display: block;
+      margin-top: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 84px;
+      height: 28px;
+      border-radius: 999px;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .pill.green {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .pill.blue {
+      color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .pill.amber {
+      color: var(--amber);
+      background: var(--amber-soft);
+    }
+
+    .pill.red {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .task-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .icon-btn {
+      width: 36px;
+      padding: 0;
+    }
+
+    .task-detail {
+      display: none;
+      border-top: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 14px 16px 16px;
+    }
+
+    .task.open .task-detail {
+      display: grid;
+      gap: 12px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(130px, 1fr));
+      gap: 10px;
+    }
+
+    .detail-item {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .detail-item span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .detail-item strong {
+      display: block;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .log-box {
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      max-height: 170px;
+      background: #0f172a;
+      color: #d1fae5;
+      border-radius: 7px;
+      font: 12px/1.55 "Cascadia Mono", Consolas, monospace;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 17px;
+    }
+
+    .settings-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .setting-row {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #eef1f5;
+    }
+
+    .setting-row:last-child {
+      border-bottom: 0;
+    }
+
+    .segmented {
+      display: inline-grid;
+      grid-template-columns: repeat(2, minmax(90px, 1fr));
+      gap: 4px;
+      max-width: 260px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f3f6fa;
+    }
+
+    .segmented button {
+      background: transparent;
+      border: 0;
+      min-height: 32px;
+    }
+
+    .segmented button.active {
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+    }
+
+    .qr {
+      display: grid;
+      place-items: center;
+      width: 180px;
+      height: 180px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, #111827 8px, transparent 8px) 0 0 / 24px 24px,
+        linear-gradient(#111827 8px, transparent 8px) 0 0 / 24px 24px,
+        #fff;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .login-layout {
+      display: flex;
+      gap: 18px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      max-width: 360px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      color: #0f172a;
+      background: #dff7ea;
+      border: 1px solid #b7ebcc;
+      box-shadow: var(--shadow);
+      transform: translateY(12px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+      font-size: 14px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        padding: 12px 16px;
+        flex-direction: row;
+        align-items: center;
+      }
+
+      .nav {
+        display: flex;
+        overflow: auto;
+      }
+
+      .side-status {
+        display: none;
+      }
+
+      .main {
+        padding: 18px;
+      }
+
+      .summary-grid,
+      .detail-grid,
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      .task-main {
+        grid-template-columns: 1fr;
+      }
+
+      .task-actions {
+        justify-content: flex-start;
+      }
+
+      .link-form,
+      .setting-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">VD</div>
+        <div>Video Downloader</div>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <button class="active" data-tab="downloads" type="button">下载任务</button>
+        <button data-tab="login" type="button">登录状态</button>
+        <button data-tab="settings" type="button">设置</button>
+      </nav>
+      <div class="side-status">
+        <div class="side-row"><span>默认内核</span><strong id="sideEngine">native</strong></div>
+        <div class="side-row"><span>并发数</span><strong id="sideConcurrency">2</strong></div>
+        <div class="side-row"><span>bilibili</span><strong id="sideLogin">未登录</strong></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="downloads" class="view active">
+        <div class="page-head">
+          <div>
+            <h1>下载任务</h1>
+            <div class="subtle">输入 bilibili 链接后创建任务。内核选择统一在设置中管理。</div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="link-form">
+            <div class="field">
+              <label for="videoUrl">视频链接</label>
+              <input id="videoUrl" value="https://www.bilibili.com/video/BV1xx411c7mD" aria-label="视频链接">
+            </div>
+            <button id="addTask" class="primary" type="button">添加下载</button>
+          </div>
+        </div>
+
+        <div class="summary-grid">
+          <div class="metric"><strong id="metricRunning">1</strong><span>进行中</span></div>
+          <div class="metric"><strong id="metricQueued">2</strong><span>排队</span></div>
+          <div class="metric"><strong id="metricDone">3</strong><span>已完成</span></div>
+          <div class="metric"><strong id="metricFailed">1</strong><span>失败</span></div>
+        </div>
+
+        <div class="task-list" id="taskList">
+          <article class="task open">
+            <div class="task-main">
+              <div class="task-title">
+                <strong>示例合集：Rust 桌面应用入门</strong>
+                <span>3 个分 P，保存到 D:\Videos\bilibili\Rust 桌面应用入门</span>
+              </div>
+              <span class="pill blue">下载中</span>
+              <span>1080P</span>
+              <span>native</span>
+              <div class="task-actions">
+                <button class="icon-btn" title="展开日志" data-action="toggle" type="button">▾</button>
+                <button title="取消任务" type="button">取消</button>
+              </div>
+            </div>
+            <div class="task-detail">
+              <div class="detail-grid">
+                <div class="detail-item"><span>登录态</span><strong>已使用</strong></div>
+                <div class="detail-item"><span>输出文件</span><strong>01 - 安装 Tauri.mp4</strong></div>
+                <div class="detail-item"><span>重试次数</span><strong>0 / 3</strong></div>
+                <div class="detail-item"><span>进度</span><strong>642MB / 1.2GB</strong></div>
+              </div>
+              <pre class="log-box">[native] probing BV1xx411c7mD
+[native] login session valid
+[native] selected 1080P DASH video + audio
+[ffmpeg] merging to 01 - 安装 Tauri.mp4</pre>
+            </div>
+          </article>
+
+          <article class="task">
+            <div class="task-main">
+              <div class="task-title">
+                <strong>单视频：B站下载链路测试</strong>
+                <span>D:\Videos\bilibili\B站下载链路测试\B站下载链路测试.mp4</span>
+              </div>
+              <span class="pill green">完成</span>
+              <span>720P</span>
+              <span>native</span>
+              <div class="task-actions">
+                <button class="icon-btn" title="展开日志" data-action="toggle" type="button">▾</button>
+                <button title="打开目录" type="button">目录</button>
+              </div>
+            </div>
+            <div class="task-detail">
+              <div class="detail-grid">
+                <div class="detail-item"><span>登录态</span><strong>未使用</strong></div>
+                <div class="detail-item"><span>输出文件</span><strong>B站下载链路测试.mp4</strong></div>
+                <div class="detail-item"><span>耗时</span><strong>00:04:18</strong></div>
+                <div class="detail-item"><span>文件大小</span><strong>384MB</strong></div>
+              </div>
+              <pre class="log-box">[native] anonymous probe succeeded
+[native] selected highest available quality: 720P
+[ffmpeg] output completed</pre>
+            </div>
+          </article>
+
+          <article class="task">
+            <div class="task-main">
+              <div class="task-title">
+                <strong>合集：复杂列表链接</strong>
+                <span>native 暂不支持该内容类型</span>
+              </div>
+              <span class="pill red">失败</span>
+              <span>未开始</span>
+              <span>native</span>
+              <div class="task-actions">
+                <button class="icon-btn" title="展开日志" data-action="toggle" type="button">▾</button>
+                <button data-action="retry-other" type="button">换内核重试</button>
+              </div>
+            </div>
+            <div class="task-detail">
+              <div class="detail-grid">
+                <div class="detail-item"><span>错误类型</span><strong>unsupported_content</strong></div>
+                <div class="detail-item"><span>建议</span><strong>使用 yt-dlp 重试</strong></div>
+                <div class="detail-item"><span>登录态</span><strong>未使用</strong></div>
+                <div class="detail-item"><span>重试次数</span><strong>0 / 3</strong></div>
+              </div>
+              <pre class="log-box">[native] collection parser did not recognize this link
+[task] fallback available: yt-dlp</pre>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="login" class="view">
+        <div class="page-head">
+          <div>
+            <h1>登录状态</h1>
+            <div class="subtle">登录态保存到本地加密文件，可用于探测和下载登录后可见的清晰度。</div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="panel">
+            <h2>bilibili</h2>
+            <div class="login-layout">
+              <div class="qr" id="qrBox">QR</div>
+              <div class="settings-grid" style="flex: 1; min-width: 240px;">
+                <div class="detail-item"><span>状态</span><strong id="loginStatus">未登录</strong></div>
+                <div class="detail-item"><span>保存方式</span><strong>本地加密文件</strong></div>
+                <div class="detail-item"><span>最近验证</span><strong id="loginChecked">无</strong></div>
+                <div style="display:flex; gap: 8px; flex-wrap: wrap;">
+                  <button id="loginBtn" class="primary" type="button">模拟扫码成功</button>
+                  <button id="validateLogin" type="button">重新验证</button>
+                  <button id="clearLogin" class="danger" type="button">清除登录态</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>登录影响</h2>
+            <div class="settings-grid">
+              <div class="detail-item"><span>匿名探测</span><strong>最高 720P</strong></div>
+              <div class="detail-item"><span>登录后探测</span><strong>最高 1080P</strong></div>
+              <div class="detail-item"><span>任务策略</span><strong>先匿名，必要时使用登录态</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="settings" class="view">
+        <div class="page-head">
+          <div>
+            <h1>设置</h1>
+            <div class="subtle">下载根目录、并发数和默认内核在这里统一配置。</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="settings-grid">
+            <div class="setting-row">
+              <div>
+                <label for="downloadRoot">下载根目录</label>
+                <div class="subtle">输出文件会按平台和标题自动分目录。</div>
+              </div>
+              <input id="downloadRoot" value="D:\Videos">
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <label for="concurrency">并发数</label>
+                <div class="subtle">作用于实际子任务，默认 2。</div>
+              </div>
+              <input id="concurrency" type="number" min="1" max="8" value="2">
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <label>默认内核</label>
+                <div class="subtle">下载任务界面不单独选择内核。</div>
+              </div>
+              <div class="segmented" aria-label="默认内核">
+                <button id="engineNative" class="active" data-engine="native" type="button">native</button>
+                <button id="engineYtdlp" data-engine="yt-dlp" type="button">yt-dlp</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <label>yt-dlp</label>
+                <div class="subtle">按需 fallback，不随 App 内置。</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span id="ytdlpStatus" class="pill amber">未安装</span>
+                <button id="installYtdlp" type="button">模拟下载</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <label>内置 ffmpeg</label>
+                <div class="subtle">随平台包分发，不依赖系统 PATH。</div>
+              </div>
+              <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <span class="pill green">ffmpeg 可用</span>
+                <span class="pill green">ffprobe 可用</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const state = {
+      engine: "native",
+      concurrency: 2,
+      loggedIn: false,
+      ytdlpInstalled: false,
+      taskCounter: 4
+    };
+
+    const toast = document.querySelector("#toast");
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    function updateSideStatus() {
+      document.querySelector("#sideEngine").textContent = state.engine;
+      document.querySelector("#sideConcurrency").textContent = state.concurrency;
+      document.querySelector("#sideLogin").textContent = state.loggedIn ? "已登录" : "未登录";
+      document.querySelector("#loginStatus").textContent = state.loggedIn ? "已登录，Cookie 已加密保存" : "未登录";
+      document.querySelector("#loginChecked").textContent = state.loggedIn ? "刚刚" : "无";
+    }
+
+    document.querySelectorAll("[data-tab]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-tab]").forEach((item) => item.classList.remove("active"));
+        document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
+        button.classList.add("active");
+        document.querySelector("#" + button.dataset.tab).classList.add("active");
+      });
+    });
+
+    document.querySelector("#taskList").addEventListener("click", (event) => {
+      const action = event.target.dataset.action;
+      if (!action) return;
+      const task = event.target.closest(".task");
+      if (action === "toggle") {
+        task.classList.toggle("open");
+      }
+      if (action === "retry-other") {
+        const status = task.querySelector(".pill");
+        const engineCell = task.querySelector(".task-main > span:nth-of-type(3)");
+        status.className = "pill amber";
+        status.textContent = "排队";
+        engineCell.textContent = state.engine === "native" ? "yt-dlp" : "native";
+        task.classList.add("open");
+        showToast("已创建换内核重试任务");
+      }
+    });
+
+    document.querySelector("#addTask").addEventListener("click", () => {
+      const url = document.querySelector("#videoUrl").value.trim();
+      if (!url) {
+        showToast("请输入 bilibili 链接");
+        return;
+      }
+      const article = document.createElement("article");
+      article.className = "task";
+      article.innerHTML = `
+        <div class="task-main">
+          <div class="task-title">
+            <strong>新任务 ${state.taskCounter}: 待解析 bilibili 链接</strong>
+            <span>${url}</span>
+          </div>
+          <span class="pill amber">排队</span>
+          <span>待探测</span>
+          <span>${state.engine}</span>
+          <div class="task-actions">
+            <button class="icon-btn" title="展开日志" data-action="toggle" type="button">▾</button>
+            <button title="取消任务" type="button">取消</button>
+          </div>
+        </div>
+        <div class="task-detail">
+          <div class="detail-grid">
+            <div class="detail-item"><span>登录态</span><strong>${state.loggedIn ? "可用" : "未登录"}</strong></div>
+            <div class="detail-item"><span>输出目录</span><strong>D:\\Videos\\bilibili</strong></div>
+            <div class="detail-item"><span>默认内核</span><strong>${state.engine}</strong></div>
+            <div class="detail-item"><span>状态</span><strong>等待并发槽位</strong></div>
+          </div>
+          <pre class="log-box">[task] created from UI
+[task] default engine: ${state.engine}
+[task] waiting for probe</pre>
+        </div>`;
+      document.querySelector("#taskList").prepend(article);
+      state.taskCounter += 1;
+      const queued = document.querySelector("#metricQueued");
+      queued.textContent = String(Number(queued.textContent) + 1);
+      showToast("任务已添加，使用当前设置中的默认内核");
+    });
+
+    document.querySelectorAll("[data-engine]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-engine]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        state.engine = button.dataset.engine;
+        updateSideStatus();
+        showToast("默认内核已切换为 " + state.engine);
+      });
+    });
+
+    document.querySelector("#concurrency").addEventListener("input", (event) => {
+      const value = Math.max(1, Math.min(8, Number(event.target.value || 1)));
+      state.concurrency = value;
+      updateSideStatus();
+    });
+
+    document.querySelector("#loginBtn").addEventListener("click", () => {
+      state.loggedIn = true;
+      updateSideStatus();
+      showToast("模拟扫码成功，登录态已写入本地加密文件");
+    });
+
+    document.querySelector("#validateLogin").addEventListener("click", () => {
+      showToast(state.loggedIn ? "登录态验证通过" : "当前未登录");
+    });
+
+    document.querySelector("#clearLogin").addEventListener("click", () => {
+      state.loggedIn = false;
+      updateSideStatus();
+      showToast("登录态已清除");
+    });
+
+    document.querySelector("#installYtdlp").addEventListener("click", () => {
+      state.ytdlpInstalled = true;
+      const status = document.querySelector("#ytdlpStatus");
+      status.className = "pill green";
+      status.textContent = "可用 v2026.05";
+      showToast("yt-dlp fallback 已准备就绪");
+    });
+
+    updateSideStatus();
+  </script>
+</body>
+</html>

@@ -198,6 +198,14 @@ Rules:
 
 The first release uses a simple single-page desktop UI with tabs or clearly separated sections.
 
+The UI design must be reviewed against the interactive prototype at:
+
+```text
+docs/superpowers/prototypes/video-downloader-ui/index.html
+```
+
+The prototype is a low-fidelity design artifact. It confirms layout, task interactions, login-state controls, Settings-only engine selection, and fallback retry behavior. It is not production frontend code.
+
 Downloads tab:
 
 - Link input.
