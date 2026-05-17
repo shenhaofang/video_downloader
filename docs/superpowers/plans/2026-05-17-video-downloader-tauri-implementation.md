@@ -677,18 +677,22 @@ fn state_name(state: TaskState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn creates_default_config_when_missing() {
-        let storage = Storage::open("sqlite::memory:").await.unwrap();
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
         let config = storage.load_config().await.unwrap();
         assert_eq!(config.default_engine, DownloadEngine::Native);
         assert_eq!(config.concurrency, 2);
+        db.close().await;
     }
 
     #[tokio::test]
     async fn stores_group_task_and_log() {
-        let storage = Storage::open("sqlite::memory:").await.unwrap();
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
         let group = TaskGroup {
             id: Uuid::new_v4(),
             source_url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
@@ -718,6 +722,33 @@ mod tests {
         };
         storage.insert_task(&task).await.unwrap();
         storage.append_log(task.id, "[task] queued").await.unwrap();
+        db.close().await;
+    }
+
+    struct TestDatabase {
+        storage: Storage,
+        path: PathBuf,
+    }
+
+    impl TestDatabase {
+        async fn open() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("video-downloader-{}.sqlite", Uuid::new_v4()));
+            let database_url = format!(
+                "sqlite://{}?mode=rwc",
+                path.to_string_lossy().replace('\\', "/")
+            );
+            let storage = Storage::open(&database_url).await.unwrap();
+
+            Self { storage, path }
+        }
+
+        async fn close(self) {
+            let path = self.path;
+            self.storage.pool.close().await;
+            drop(self.storage);
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 ```
