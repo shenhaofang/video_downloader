@@ -172,7 +172,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "sync", "time"] }
@@ -201,7 +200,6 @@ Create `src-tauri/src/lib.rs`:
 ```rust
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .run(tauri::generate_context!())
         .expect("failed to run video downloader");
 }
@@ -236,11 +234,7 @@ Create `src-tauri/tauri.conf.json`:
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "externalBin": [
-      "binaries/ffmpeg",
-      "binaries/ffprobe"
-    ]
+    "targets": "all"
   }
 }
 ```
@@ -254,15 +248,7 @@ Create `src-tauri/capabilities/default.json`:
   "description": "Default desktop capability",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "shell:default",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        { "name": "binaries/ffmpeg", "sidecar": true },
-        { "name": "binaries/ffprobe", "sidecar": true }
-      ]
-    }
+    "core:default"
   ]
 }
 ```
