@@ -165,6 +165,7 @@ Batch behavior:
 - Concurrency applies to `DownloadTask`, not `TaskGroup`.
 - Default concurrency is 2.
 - One failed child task does not block the rest unless the failure is a global condition such as expired login state.
+- Expanded `TaskGroup` details must show each child `DownloadTask` with video name, output file, download progress, and retry count.
 
 Restart behavior:
 
@@ -216,6 +217,7 @@ Downloads tab:
 - Add download button.
 - Task groups and child tasks.
 - Status, title, quality, login usage, output path, failure reason, and actual engine used.
+- For collection or multi-part tasks, expanded details show each child video name, output file, download progress, and retry count.
 - Cancel.
 - Retry.
 - Retry with the other engine when useful.
@@ -285,6 +287,7 @@ Before calling the first release complete, verify:
 - Missing `yt-dlp` triggers the on-demand install/download path.
 - Bundled `ffmpeg` and `ffprobe` are detected and used.
 - Task logs can be expanded in the UI.
+- Collection task details show every child video's name, output file, download progress, and retry count.
 - Files are written under the configured root directory using the expected naming scheme.
 - Invalid filenames and conflicts are handled without overwriting existing files.
 
