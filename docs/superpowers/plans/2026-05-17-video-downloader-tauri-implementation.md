@@ -1243,8 +1243,20 @@ pub async fn create_group_from_probe(
         state: TaskState::Queued,
         created_at: Utc::now(),
     };
+    let is_collection = probe.items.len() > 1;
     let tasks = probe.items.into_iter().enumerate().map(|(idx, item)| {
-        let path = output_path(Path::new(&request.output_dir), "bilibili", &group.title, Some((idx + 1) as u32), &item.title);
+        let output_title = if is_collection {
+            strip_leading_numeric_prefix(&item.title)
+        } else {
+            item.title.as_str()
+        };
+        let path = output_path(
+            Path::new(&request.output_dir),
+            "bilibili",
+            &group.title,
+            is_collection.then_some((idx + 1) as u32),
+            output_title,
+        );
         DownloadTask {
             id: Uuid::new_v4(),
             group_id,
@@ -1265,6 +1277,15 @@ pub async fn create_group_from_probe(
     Ok(CreatedTaskGroup { group, tasks })
 }
 
+fn strip_leading_numeric_prefix(title: &str) -> &str {
+    if let Some((prefix, rest)) = title.split_once(" - ") {
+        if prefix.len() == 2 && prefix.chars().all(|value| value.is_ascii_digit()) {
+            return rest;
+        }
+    }
+    title
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,6 +1302,7 @@ mod tests {
         assert_eq!(result.group.platform, "bilibili");
         assert_eq!(result.tasks.len(), 3);
         assert!(result.tasks[0].output_file.contains("01 - 安装 Tauri.mp4"));
+        assert!(!result.tasks[0].output_file.contains("01 - 01"));
     }
 }
 ```
