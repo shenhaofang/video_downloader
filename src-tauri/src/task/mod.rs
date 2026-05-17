@@ -6,6 +6,7 @@ use crate::media::output_path;
 use crate::models::{DownloadEngine, DownloadTask, TaskGroup, TaskState};
 use crate::platform::{PlatformDownloader, ProbeInput};
 use chrono::Utc;
+use serde::Serialize;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -17,7 +18,7 @@ pub struct CreateTaskRequest {
     pub has_login: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CreatedTaskGroup {
     pub group: TaskGroup,
     pub tasks: Vec<DownloadTask>,

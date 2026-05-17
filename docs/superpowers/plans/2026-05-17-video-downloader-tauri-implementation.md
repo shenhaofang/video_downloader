@@ -1377,6 +1377,7 @@ git commit -m "feat: add task group creation and retry policy"
 **Files:**
 - Create: `src-tauri/src/commands.rs`
 - Modify: `src-tauri/src/lib.rs`
+- Modify: `src-tauri/src/task/mod.rs`
 - Test: `src-tauri/src/commands.rs`
 
 - [ ] **Step 1: Add command response types and handlers**
@@ -1398,7 +1399,7 @@ pub struct CreateTaskCommand {
 }
 
 #[tauri::command]
-pub async fn get_config() -> AppResult<AppConfig> {
+pub fn get_config() -> AppResult<AppConfig> {
     Ok(AppConfig::default())
 }
 
@@ -1413,7 +1414,7 @@ pub async fn create_task(input: CreateTaskCommand) -> AppResult<CreatedTaskGroup
 }
 
 #[tauri::command]
-pub async fn list_platform_logins() -> AppResult<Vec<PlatformLoginRow>> {
+pub fn list_platform_logins() -> AppResult<Vec<PlatformLoginRow>> {
     Ok(vec![PlatformLoginRow {
         platform: "bilibili".into(),
         status: "未登录".into(),
@@ -1438,18 +1439,49 @@ mod tests {
             has_login: true,
         }).await.unwrap();
         assert_eq!(result.tasks.len(), 3);
+        let first_file_name = std::path::Path::new(&result.tasks[0].output_file)
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        assert_eq!(first_file_name, "01 - 安装 Tauri.mp4");
     }
 
-    #[tokio::test]
-    async fn exposes_flat_platform_login_rows() {
-        let rows = list_platform_logins().await.unwrap();
-        assert_eq!(rows[0].platform, "bilibili");
-        assert_eq!(rows[0].status, "未登录");
+    #[test]
+    fn exposes_flat_platform_login_rows() {
+        let rows = list_platform_logins().unwrap();
+        assert_eq!(
+            rows,
+            vec![PlatformLoginRow {
+                platform: "bilibili".into(),
+                status: "未登录".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn get_config_returns_native_default() {
+        let config = get_config().unwrap();
+        assert_eq!(config.default_engine, DownloadEngine::Native);
+        assert_eq!(config.concurrency, 2);
     }
 }
 ```
 
-- [ ] **Step 2: Register commands**
+- [ ] **Step 2: Add command return serialization**
+
+Modify `src-tauri/src/task/mod.rs` so the command return DTO can be serialized by Tauri:
+
+```rust
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatedTaskGroup {
+    pub group: TaskGroup,
+    pub tasks: Vec<DownloadTask>,
+}
+```
+
+- [ ] **Step 3: Register commands**
 
 Modify `src-tauri/src/lib.rs`:
 
@@ -1465,7 +1497,6 @@ pub mod task;
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::create_task,
@@ -1476,7 +1507,7 @@ pub fn run() {
 }
 ```
 
-- [ ] **Step 3: Run command tests**
+- [ ] **Step 4: Run command tests**
 
 ```powershell
 cd src-tauri
