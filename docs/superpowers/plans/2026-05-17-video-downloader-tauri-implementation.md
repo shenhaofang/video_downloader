@@ -1762,8 +1762,11 @@ git commit -m "feat: implement reviewed desktop ui"
 - Create: `src-tauri/src/auth/bilibili.rs`
 - Modify: `src-tauri/src/lib.rs`
 - Test: `src-tauri/src/auth/session_store.rs`
+- Test: `src-tauri/src/auth/bilibili.rs`
 
-- [ ] **Step 1: Add encrypted session store**
+Hardening tests for this task must cover corrupt session payloads, malformed `local.key` files without panic, encrypted payloads not containing plaintext cookies, missing sessions returning `None`, and safe platform-derived session filenames.
+
+- [x] **Step 1: Add encrypted session store**
 
 Create `src-tauri/src/auth/mod.rs`:
 
@@ -1780,15 +1783,27 @@ use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Key, Nonce};
 use base64::{engine::general_purpose, Engine};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::{fmt, fs, io};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredSession {
     pub platform: String,
     pub cookies: String,
     pub expires_at: Option<String>,
     pub last_verified_at: Option<String>,
+}
+
+impl fmt::Debug for StoredSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StoredSession")
+            .field("platform", &self.platform)
+            .field("cookies", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("last_verified_at", &self.last_verified_at)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1820,14 +1835,24 @@ impl SessionStore {
         if !path.exists() {
             return Ok(None);
         }
-        let key = self.load_or_create_key()?;
-        let payload = fs::read_to_string(path).map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+        let payload = match fs::read_to_string(&path) {
+            Ok(payload) => payload,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(AppError::structured(ErrorCode::FilesystemError, err.to_string())),
+        };
         let (nonce_text, cipher_text) = payload.split_once(':').ok_or_else(|| AppError::structured(ErrorCode::LoginExpired, "invalid session file"))?;
         let nonce_bytes = general_purpose::STANDARD.decode(nonce_text).map_err(|_| AppError::structured(ErrorCode::LoginExpired, "invalid session nonce"))?;
+        if nonce_bytes.len() != 12 {
+            return Err(AppError::structured(ErrorCode::LoginExpired, "invalid session nonce"));
+        }
         let ciphertext = general_purpose::STANDARD.decode(cipher_text).map_err(|_| AppError::structured(ErrorCode::LoginExpired, "invalid session payload"))?;
+        let key = self.load_or_create_key()?;
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
         let plaintext = cipher.decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref()).map_err(|_| AppError::structured(ErrorCode::LoginExpired, "failed to decrypt session"))?;
-        let session = serde_json::from_slice(&plaintext).map_err(|_| AppError::structured(ErrorCode::LoginExpired, "invalid session json"))?;
+        let session: StoredSession = serde_json::from_slice(&plaintext).map_err(|_| AppError::structured(ErrorCode::LoginExpired, "invalid session json"))?;
+        if session.platform != platform {
+            return Err(AppError::structured(ErrorCode::LoginExpired, "session platform mismatch"));
+        }
         Ok(Some(session))
     }
 
@@ -1840,7 +1865,7 @@ impl SessionStore {
     }
 
     fn session_path(&self, platform: &str) -> PathBuf {
-        self.dir.join(format!("{platform}.session.enc"))
+        self.dir.join(format!("{}.session.enc", safe_platform_file_stem(platform)))
     }
 
     fn key_path(&self) -> PathBuf {
@@ -1852,8 +1877,11 @@ impl SessionStore {
         let path = self.key_path();
         if path.exists() {
             let bytes = fs::read(path).map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+            if bytes.len() != 32 {
+                return Err(AppError::structured(ErrorCode::LoginExpired, "invalid local session key"));
+            }
             let mut key = [0_u8; 32];
-            key.copy_from_slice(&bytes[..32]);
+            key.copy_from_slice(&bytes);
             return Ok(key);
         }
         let mut key = [0_u8; 32];
@@ -1884,9 +1912,27 @@ mod tests {
         assert!(store.load("bilibili").unwrap().is_none());
     }
 }
+
+fn safe_platform_file_stem(platform: &str) -> String {
+    let stem: String = platform
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem.is_empty() {
+        "session".to_string()
+    } else {
+        stem
+    }
+}
 ```
 
-- [ ] **Step 2: Add bilibili session facade**
+- [x] **Step 2: Add bilibili session facade**
 
 Create `src-tauri/src/auth/bilibili.rs`:
 
@@ -1924,11 +1970,11 @@ impl BilibiliAuth {
 }
 ```
 
-- [ ] **Step 3: Export auth module**
+- [x] **Step 3: Export auth module**
 
 Modify `src-tauri/src/lib.rs` and add `pub mod auth;`.
 
-- [ ] **Step 4: Run auth tests**
+- [x] **Step 4: Run auth tests**
 
 ```powershell
 cd src-tauri
@@ -1937,7 +1983,7 @@ cargo test auth
 
 Expected: encrypted session round-trip test passes.
 
-- [ ] **Step 5: Commit session storage**
+- [x] **Step 5: Commit session storage**
 
 ```powershell
 git add src-tauri/src/lib.rs src-tauri/src/auth
