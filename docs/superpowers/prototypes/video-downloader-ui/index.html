@@ -131,11 +131,13 @@
       align-items: center;
       gap: 10px;
       width: 100%;
+      min-width: 96px;
       min-height: 42px;
       border: 1px solid transparent;
       background: transparent;
       color: #cbd5e1;
       text-align: left;
+      white-space: nowrap;
     }
 
     .nav button.active {
@@ -627,6 +629,13 @@
       .nav {
         display: flex;
         overflow: auto;
+      }
+
+      .nav button {
+        flex: 0 0 auto;
+        justify-content: center;
+        min-width: 112px;
+        width: auto;
       }
 
       .side-status {
