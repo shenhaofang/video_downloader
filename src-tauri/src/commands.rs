@@ -176,9 +176,15 @@ fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
 
     ToolStatus {
         ytdlp: ytdlp.into(),
-        ffmpeg: "missing".into(),
-        ffprobe: "missing".into(),
+        ffmpeg: configured_tool_status(config.ffmpeg_path.as_deref()).into(),
+        ffprobe: configured_tool_status(config.ffprobe_path.as_deref()).into(),
     }
+}
+
+fn configured_tool_status(path: Option<&str>) -> &'static str {
+    path.filter(|value| std::path::Path::new(value).is_file())
+        .map(|_| "available")
+        .unwrap_or("missing")
 }
 
 #[cfg(test)]
@@ -335,6 +341,8 @@ mod tests {
             concurrency: 5,
             default_engine: DownloadEngine::YtDlp,
             ytdlp_path: Some("C:\\tools\\yt-dlp.exe".into()),
+            ffmpeg_path: Some("C:\\tools\\ffmpeg.exe".into()),
+            ffprobe_path: Some("C:\\tools\\ffprobe.exe".into()),
         };
         state.storage.save_config(&config).await.unwrap();
 
@@ -379,6 +387,31 @@ mod tests {
         assert_eq!(status.ytdlp, "available");
         assert_eq!(status.ffmpeg, "missing");
         assert_eq!(status.ffprobe, "missing");
+        cleanup_state(state).await;
+        fs::remove_dir_all(tool_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_tool_status_reads_persisted_media_tool_paths_from_app_state() {
+        let state = command_test_state().await;
+        let tool_dir =
+            std::env::temp_dir().join(format!("vd-media-tool-status-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tool_dir).unwrap();
+        let ffmpeg = tool_dir.join("ffmpeg.exe");
+        let ffprobe = tool_dir.join("ffprobe.exe");
+        fs::write(&ffmpeg, b"test binary").unwrap();
+        fs::write(&ffprobe, b"test binary").unwrap();
+        let config = AppConfig {
+            ffmpeg_path: Some(ffmpeg.to_string_lossy().to_string()),
+            ffprobe_path: Some(ffprobe.to_string_lossy().to_string()),
+            ..AppConfig::default()
+        };
+        state.storage.save_config(&config).await.unwrap();
+
+        let status = get_tool_status_from_state(&state).await.unwrap();
+
+        assert_eq!(status.ffmpeg, "available");
+        assert_eq!(status.ffprobe, "available");
         cleanup_state(state).await;
         fs::remove_dir_all(tool_dir).unwrap();
     }
@@ -478,6 +511,28 @@ mod tests {
         assert_eq!(status.ytdlp, "available");
         assert_eq!(status.ffmpeg, "missing");
         assert_eq!(status.ffprobe, "missing");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tool_status_uses_configured_media_tool_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("vd-media-tool-status-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let ffmpeg = dir.join("ffmpeg.exe");
+        let ffprobe = dir.join("ffprobe.exe");
+        fs::write(&ffmpeg, b"test binary").unwrap();
+        fs::write(&ffprobe, b"test binary").unwrap();
+        let config = AppConfig {
+            ffmpeg_path: Some(ffmpeg.to_string_lossy().to_string()),
+            ffprobe_path: Some(ffprobe.to_string_lossy().to_string()),
+            ..AppConfig::default()
+        };
+
+        let status = tool_status_from_config(&config);
+
+        assert_eq!(status.ffmpeg, "available");
+        assert_eq!(status.ffprobe, "available");
         fs::remove_dir_all(dir).unwrap();
     }
 

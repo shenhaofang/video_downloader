@@ -24,7 +24,7 @@ impl Storage {
 
     async fn migrate(&self) -> AppResult<()> {
         let statements = [
-            "CREATE TABLE IF NOT EXISTS app_config (id INTEGER PRIMARY KEY CHECK (id = 1), download_root TEXT NOT NULL, concurrency INTEGER NOT NULL, default_engine TEXT NOT NULL, ytdlp_path TEXT)",
+            "CREATE TABLE IF NOT EXISTS app_config (id INTEGER PRIMARY KEY CHECK (id = 1), download_root TEXT NOT NULL, concurrency INTEGER NOT NULL, default_engine TEXT NOT NULL, ytdlp_path TEXT, ffmpeg_path TEXT, ffprobe_path TEXT)",
             "CREATE TABLE IF NOT EXISTS task_groups (id TEXT PRIMARY KEY, source_url TEXT NOT NULL, platform TEXT NOT NULL, title TEXT NOT NULL, output_dir TEXT NOT NULL, engine TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS download_tasks (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, title TEXT NOT NULL, output_file TEXT NOT NULL, state TEXT NOT NULL, engine TEXT NOT NULL, quality TEXT, used_login INTEGER NOT NULL, bytes_downloaded INTEGER NOT NULL, bytes_total INTEGER, retry_count INTEGER NOT NULL, max_retries INTEGER NOT NULL, error_code TEXT, error_message TEXT)",
             "CREATE TABLE IF NOT EXISTS task_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, created_at TEXT NOT NULL, line TEXT NOT NULL)",
@@ -36,14 +36,28 @@ impl Storage {
                 .await
                 .map_err(storage_error)?;
         }
+        self.ensure_app_config_columns().await?;
         self.ensure_download_task_columns().await?;
+
+        Ok(())
+    }
+
+    async fn ensure_app_config_columns(&self) -> AppResult<()> {
+        for name in ["ffmpeg_path", "ffprobe_path"] {
+            if !self.table_column_exists("app_config", name).await? {
+                sqlx::query(&format!("ALTER TABLE app_config ADD COLUMN {name} TEXT"))
+                    .execute(&self.pool)
+                    .await
+                    .map_err(storage_error)?;
+            }
+        }
 
         Ok(())
     }
 
     async fn ensure_download_task_columns(&self) -> AppResult<()> {
         for (name, definition) in [("bvid", "TEXT"), ("cid", "INTEGER"), ("page", "INTEGER")] {
-            if !self.download_task_column_exists(name).await? {
+            if !self.table_column_exists("download_tasks", name).await? {
                 sqlx::query(&format!(
                     "ALTER TABLE download_tasks ADD COLUMN {name} {definition}"
                 ))
@@ -56,8 +70,8 @@ impl Storage {
         Ok(())
     }
 
-    async fn download_task_column_exists(&self, name: &str) -> AppResult<bool> {
-        let rows = sqlx::query("PRAGMA table_info(download_tasks)")
+    async fn table_column_exists(&self, table: &str, name: &str) -> AppResult<bool> {
+        let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
             .fetch_all(&self.pool)
             .await
             .map_err(storage_error)?;
@@ -67,7 +81,7 @@ impl Storage {
 
     pub async fn load_config(&self) -> AppResult<AppConfig> {
         let row = sqlx::query(
-            "SELECT download_root, concurrency, default_engine, ytdlp_path FROM app_config WHERE id = 1",
+            "SELECT download_root, concurrency, default_engine, ytdlp_path, ffmpeg_path, ffprobe_path FROM app_config WHERE id = 1",
         )
         .fetch_optional(&self.pool)
         .await
@@ -84,17 +98,21 @@ impl Storage {
             concurrency: normalize_persisted_concurrency(row.get("concurrency")),
             default_engine: parse_engine(&row.get::<String, _>("default_engine")),
             ytdlp_path: row.get("ytdlp_path"),
+            ffmpeg_path: row.get("ffmpeg_path"),
+            ffprobe_path: row.get("ffprobe_path"),
         })
     }
 
     pub async fn save_config(&self, config: &AppConfig) -> AppResult<()> {
         sqlx::query(
-            "INSERT INTO app_config (id, download_root, concurrency, default_engine, ytdlp_path) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET download_root = excluded.download_root, concurrency = excluded.concurrency, default_engine = excluded.default_engine, ytdlp_path = excluded.ytdlp_path",
+            "INSERT INTO app_config (id, download_root, concurrency, default_engine, ytdlp_path, ffmpeg_path, ffprobe_path) VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET download_root = excluded.download_root, concurrency = excluded.concurrency, default_engine = excluded.default_engine, ytdlp_path = excluded.ytdlp_path, ffmpeg_path = excluded.ffmpeg_path, ffprobe_path = excluded.ffprobe_path",
         )
         .bind(&config.download_root)
         .bind(normalize_concurrency(config.concurrency) as i64)
         .bind(engine_name(config.default_engine))
         .bind(&config.ytdlp_path)
+        .bind(&config.ffmpeg_path)
+        .bind(&config.ffprobe_path)
         .execute(&self.pool)
         .await
         .map_err(storage_error)?;
@@ -320,9 +338,13 @@ mod tests {
         assert_eq!(config.download_root, AppConfig::default().download_root);
         assert_eq!(config.concurrency, AppConfig::default().concurrency);
         assert_eq!(config.default_engine, AppConfig::default().default_engine);
+        assert_eq!(config.ffmpeg_path, None);
+        assert_eq!(config.ffprobe_path, None);
         assert_eq!(saved.download_root, config.download_root);
         assert_eq!(saved.concurrency, config.concurrency);
         assert_eq!(saved.default_engine, config.default_engine);
+        assert_eq!(saved.ffmpeg_path, None);
+        assert_eq!(saved.ffprobe_path, None);
 
         db.close().await;
     }
@@ -336,6 +358,8 @@ mod tests {
             concurrency: 7,
             default_engine: DownloadEngine::YtDlp,
             ytdlp_path: Some(String::from("C:\\tools\\yt-dlp.exe")),
+            ffmpeg_path: Some(String::from("C:\\tools\\ffmpeg.exe")),
+            ffprobe_path: Some(String::from("C:\\tools\\ffprobe.exe")),
         };
 
         storage.save_config(&config).await.unwrap();
@@ -345,6 +369,8 @@ mod tests {
         assert_eq!(loaded.concurrency, config.concurrency);
         assert_eq!(loaded.default_engine, config.default_engine);
         assert_eq!(loaded.ytdlp_path, config.ytdlp_path);
+        assert_eq!(loaded.ffmpeg_path, config.ffmpeg_path);
+        assert_eq!(loaded.ffprobe_path, config.ffprobe_path);
 
         db.close().await;
     }

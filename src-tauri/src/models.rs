@@ -62,6 +62,8 @@ pub struct AppConfig {
     pub concurrency: u8,
     pub default_engine: DownloadEngine,
     pub ytdlp_path: Option<String>,
+    pub ffmpeg_path: Option<String>,
+    pub ffprobe_path: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -71,6 +73,8 @@ impl Default for AppConfig {
             concurrency: 2,
             default_engine: DownloadEngine::Native,
             ytdlp_path: None,
+            ffmpeg_path: None,
+            ffprobe_path: None,
         }
     }
 }
@@ -86,6 +90,8 @@ mod tests {
         assert_eq!(config.concurrency, 2);
         assert_eq!(config.default_engine, DownloadEngine::Native);
         assert!(config.ytdlp_path.is_none());
+        assert!(config.ffmpeg_path.is_none());
+        assert!(config.ffprobe_path.is_none());
     }
 
     #[test]

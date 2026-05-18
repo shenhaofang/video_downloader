@@ -50,8 +50,8 @@
 ## Known Gaps
 
 - The real frontend still does not expose QR-code login controls. The backend commands exist, but the expanded bilibili login detail is still placeholder text.
-- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, and a storage-backed single-task executor can persist progress/results. The desktop runtime still lacks bundled/configured `ffmpeg` and no background scheduler invokes the executor from the UI yet.
+- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, and configured `ffmpeg` / `ffprobe` paths can be stored and reported. The desktop runtime still lacks bundled binaries and no background scheduler invokes the executor from the UI yet.
 - `create_task` uses real native bilibili probe by default and persists created records, but it still only creates queued tasks; no command/background runner starts real download work yet.
 - Created task records are queryable from storage, but the frontend does not reload persisted task history on startup yet.
 - Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.
-- Bundled `ffmpeg` / `ffprobe` binaries and license profile are not configured for distribution.
+- Bundled `ffmpeg` / `ffprobe` binaries, `externalBin` entries, and license profile are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build.

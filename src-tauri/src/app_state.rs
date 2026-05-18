@@ -65,6 +65,8 @@ mod tests {
             concurrency: 4,
             default_engine: DownloadEngine::YtDlp,
             ytdlp_path: Some("C:\\tools\\yt-dlp.exe".into()),
+            ffmpeg_path: Some("C:\\tools\\ffmpeg.exe".into()),
+            ffprobe_path: Some("C:\\tools\\ffprobe.exe".into()),
         };
         state.storage.save_config(&config).await.unwrap();
         assert_eq!(state.storage.load_config().await.unwrap(), config);
