@@ -37,7 +37,7 @@
 - [x] Native engine returns `unsupported_content` for unsupported links.
 - [x] Missing `yt-dlp` reports `engine_missing`.
 - [x] `yt-dlp` adapter can execute a configured local binary.
-- [ ] Bundled `ffmpeg` and `ffprobe` status is visible.
+- [x] Bundled `ffmpeg` and `ffprobe` status is visible.
 - [ ] FFmpeg license profile is recorded before public distribution.
 
 ## Login
@@ -50,7 +50,7 @@
 ## Known Gaps
 
 - The real frontend exposes manual QR-code login controls in the expanded bilibili login detail; automatic polling and rendered QR images are still deferred.
-- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and reported by command, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, live progress streaming, and background concurrency scheduling.
+- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and shown in the UI, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, live progress streaming, and background concurrency scheduling.
 - `create_task` uses real native bilibili probe by default and persists created records; the frontend now triggers `run_task` for created child tasks and reloads persisted history on startup, but it still does not stream in-flight progress.
 - Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.
 - Bundled `ffmpeg` / `ffprobe` binaries, `externalBin` entries, and license profile are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build.

@@ -59,6 +59,12 @@ export interface BilibiliLoginState {
   error: string | null;
 }
 
+export interface ToolStatus {
+  ytdlp: string;
+  ffmpeg: string;
+  ffprobe: string;
+}
+
 export interface AppState {
   activeTab: TabId;
   settings: AppSettings;
@@ -66,6 +72,7 @@ export interface AppState {
   expandedPlatforms: Set<string>;
   taskGroups: CreatedTaskGroup[];
   bilibiliLogin: BilibiliLoginState;
+  toolStatus: ToolStatus;
 }
 
 export function createInitialState(): AppState {
@@ -88,6 +95,11 @@ export function createInitialState(): AppState {
       status: null,
       message: null,
       error: null,
+    },
+    toolStatus: {
+      ytdlp: "missing",
+      ffmpeg: "missing",
+      ffprobe: "missing",
     },
   };
 }

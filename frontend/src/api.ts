@@ -40,6 +40,12 @@ export interface LoginPollResult {
   message: string;
 }
 
+export interface ToolStatus {
+  ytdlp: string;
+  ffmpeg: string;
+  ffprobe: string;
+}
+
 export async function getConfig(): Promise<AppSettings> {
   try {
     const config = await invoke<TauriConfig>("get_config");
@@ -147,6 +153,17 @@ export async function listPlatformLogins(): Promise<PlatformLoginRow[]> {
   }
 }
 
+export async function getToolStatus(): Promise<ToolStatus> {
+  try {
+    return await invoke<ToolStatus>("get_tool_status");
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return fallbackToolStatus();
+    }
+    throw error;
+  }
+}
+
 function isTauriUnavailable(error: unknown): boolean {
   const hasRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   if (hasRuntime) {
@@ -174,6 +191,14 @@ function fallbackConfig(): AppSettings {
 
 function fallbackPlatforms(): PlatformLoginRow[] {
   return [{ platform: "bilibili", status: "未登录" }];
+}
+
+function fallbackToolStatus(): ToolStatus {
+  return {
+    ytdlp: "missing",
+    ffmpeg: "missing",
+    ffprobe: "missing",
+  };
 }
 
 function fallbackTaskGroup(outputDir: string): CreatedTaskGroup {

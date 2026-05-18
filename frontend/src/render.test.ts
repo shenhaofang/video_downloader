@@ -195,10 +195,18 @@ describe("renderApp", () => {
         concurrency: 4,
       }),
     );
+    const getToolStatus = vi.fn().mockResolvedValue({
+      ytdlp: "missing",
+      ffmpeg: "available",
+      ffprobe: "available",
+    });
     const state = createInitialState();
-    renderApp(root, state, { saveConfig });
+    renderApp(root, state, { saveConfig, getToolStatus });
 
     root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    expect(root.textContent).toContain("yt-dlp缺失");
+    expect(root.textContent).toContain("ffmpeg缺失");
+    expect(root.textContent).toContain("ffprobe缺失");
     root.querySelector<HTMLInputElement>("[data-testid='download-root']")!.value = "E:\\Videos";
     root.querySelector<HTMLInputElement>("[data-testid='concurrency']")!.value = "4";
     root.querySelector<HTMLInputElement>("[data-testid='ffmpeg-path']")!.value =
@@ -219,6 +227,11 @@ describe("renderApp", () => {
       });
     });
     expect(state.settings.downloadRoot).toBe("E:\\Videos");
+    await vi.waitFor(() => {
+      expect(getToolStatus).toHaveBeenCalledOnce();
+      expect(root.textContent).toContain("ffmpeg可用");
+      expect(root.textContent).toContain("ffprobe可用");
+    });
     root.querySelector<HTMLButtonElement>("[data-tab='downloads']")?.click();
     expect(root.querySelector<HTMLInputElement>("[data-testid='output-directory']")?.value).toBe(
       "E:\\Videos\\bilibili",

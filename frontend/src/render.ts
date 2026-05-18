@@ -1,6 +1,7 @@
 import {
   clearBilibiliLogin as defaultClearBilibiliLogin,
   createTask as defaultCreateTask,
+  getToolStatus as defaultGetToolStatus,
   pollBilibiliLogin as defaultPollBilibiliLogin,
   runTask as defaultRunTask,
   saveConfig as defaultSaveConfig,
@@ -24,6 +25,7 @@ export interface RenderDependencies {
   startBilibiliLogin?: typeof defaultStartBilibiliLogin;
   pollBilibiliLogin?: typeof defaultPollBilibiliLogin;
   clearBilibiliLogin?: typeof defaultClearBilibiliLogin;
+  getToolStatus?: typeof defaultGetToolStatus;
 }
 
 export function renderApp(
@@ -37,6 +39,7 @@ export function renderApp(
   const startBilibiliLogin = dependencies.startBilibiliLogin ?? defaultStartBilibiliLogin;
   const pollBilibiliLogin = dependencies.pollBilibiliLogin ?? defaultPollBilibiliLogin;
   const clearBilibiliLogin = dependencies.clearBilibiliLogin ?? defaultClearBilibiliLogin;
+  const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
   root.replaceChildren(
     buildAppShell(root, state, {
       createTask,
@@ -45,6 +48,7 @@ export function renderApp(
       startBilibiliLogin,
       pollBilibiliLogin,
       clearBilibiliLogin,
+      getToolStatus,
     }),
   );
 }
@@ -381,6 +385,7 @@ function buildSettingsPanel(
   ffmpeg.querySelector("input")!.value = state.settings.ffmpegPath ?? "";
   const ffprobe = field("ffprobe 路径", "ffprobe-path", "C:\\tools\\ffprobe.exe");
   ffprobe.querySelector("input")!.value = state.settings.ffprobePath ?? "";
+  const toolStatus = buildToolStatusPanel(state);
 
   const engine = element("div", "field");
   engine.dataset.testid = "default-engine";
@@ -416,11 +421,29 @@ function buildSettingsPanel(
       ffprobePath: nullablePath(readInput(settings, "ffprobe-path")),
     });
     state.settings = saved;
+    state.toolStatus = await dependencies.getToolStatus();
     renderApp(root, state, dependencies);
   });
-  settings.append(rootField, concurrency, engine, ytdlp, ffmpeg, ffprobe, save);
+  settings.append(rootField, concurrency, engine, ytdlp, ffmpeg, ffprobe, toolStatus, save);
   panel.append(settings);
   return panel;
+}
+
+function buildToolStatusPanel(state: AppState): HTMLElement {
+  const status = element("div", "tool-status");
+  status.append(element("span", "tool-status-title", "工具状态"));
+  status.append(
+    toolStatusItem("yt-dlp", state.toolStatus.ytdlp),
+    toolStatusItem("ffmpeg", state.toolStatus.ffmpeg),
+    toolStatusItem("ffprobe", state.toolStatus.ffprobe),
+  );
+  return status;
+}
+
+function toolStatusItem(name: string, status: string): HTMLElement {
+  const item = element("div", "tool-status-item");
+  item.append(element("span", "", name), element("strong", "", toolStatusLabel(status)));
+  return item;
 }
 
 function readInput(root: HTMLElement, testId: string): string {
@@ -472,6 +495,14 @@ function loginStatusText(status: string | null, message: string | null): string 
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function toolStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    available: "可用",
+    missing: "缺失",
+  };
+  return labels[status] ?? status;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(

@@ -3,6 +3,7 @@ import {
   clearBilibiliLogin,
   createTask,
   getConfig,
+  getToolStatus,
   listTaskGroups,
   pollBilibiliLogin,
   runTask,
@@ -183,5 +184,21 @@ describe("api fallback detection", () => {
 
     await expect(clearBilibiliLogin()).resolves.toBeUndefined();
     expect(invokeMock).toHaveBeenCalledWith("clear_bilibili_login");
+  });
+
+  test("loads local media tool status through Tauri command", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      ytdlp: "missing",
+      ffmpeg: "available",
+      ffprobe: "missing",
+    });
+
+    await expect(getToolStatus()).resolves.toEqual({
+      ytdlp: "missing",
+      ffmpeg: "available",
+      ffprobe: "missing",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("get_tool_status");
   });
 });

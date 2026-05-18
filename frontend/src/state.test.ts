@@ -10,6 +10,11 @@ describe("state defaults", () => {
     expect(state.settings.concurrency).toBe(2);
     expect(state.settings.ffmpegPath).toBeNull();
     expect(state.settings.ffprobePath).toBeNull();
+    expect(state.toolStatus).toEqual({
+      ytdlp: "missing",
+      ffmpeg: "missing",
+      ffprobe: "missing",
+    });
   });
 
   test("prefills task output directory from the default root", () => {

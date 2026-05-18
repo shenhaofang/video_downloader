@@ -290,6 +290,36 @@ button {
   background: #334155;
 }
 
+.tool-status {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+  align-items: center;
+  padding-top: 4px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.tool-status-title {
+  font-weight: 700;
+  color: #111827;
+}
+
+.tool-status-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
+
+.tool-status-item strong {
+  color: #111827;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -316,7 +346,8 @@ button {
   .download-toolbar,
   .settings-grid,
   .child-task,
-  .task-group-summary {
+  .task-group-summary,
+  .tool-status {
     grid-template-columns: minmax(0, 1fr);
   }
 
