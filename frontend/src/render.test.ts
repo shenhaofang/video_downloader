@@ -3,42 +3,44 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { renderApp } from "./render";
 import { createInitialState, type CreatedTaskGroup } from "./state";
 
-const createdCollection: CreatedTaskGroup = {
-  group: {
-    id: "group-1",
-    title: "Rust 桌面应用入门",
-    output_dir: "D:\\Videos\\bilibili",
-    state: "queued",
-  },
-  tasks: [
-    {
-      id: "task-1",
-      title: "01 - 安装 Tauri",
-      output_file: "D:\\Videos\\bilibili\\Rust 桌面应用入门\\01 - 安装 Tauri.mp4",
+function createdCollectionFixture(): CreatedTaskGroup {
+  return {
+    group: {
+      id: "group-1",
+      title: "Rust 桌面应用入门",
+      output_dir: "D:\\Videos\\bilibili",
       state: "queued",
-      bytes_downloaded: 25,
-      bytes_total: 100,
-      retry_count: 1,
-      max_retries: 3,
-      quality: "1080p",
-      used_login: false,
-      engine: "native",
     },
-    {
-      id: "task-2",
-      title: "02 - 命令桥接",
-      output_file: "D:\\Videos\\bilibili\\Rust 桌面应用入门\\02 - 命令桥接.mp4",
-      state: "downloading",
-      bytes_downloaded: 50,
-      bytes_total: 100,
-      retry_count: 0,
-      max_retries: 3,
-      quality: "1080p",
-      used_login: true,
-      engine: "native",
-    },
-  ],
-};
+    tasks: [
+      {
+        id: "task-1",
+        title: "01 - 安装 Tauri",
+        output_file: "D:\\Videos\\bilibili\\Rust 桌面应用入门\\01 - 安装 Tauri.mp4",
+        state: "queued",
+        bytes_downloaded: 25,
+        bytes_total: 100,
+        retry_count: 1,
+        max_retries: 3,
+        quality: "1080p",
+        used_login: false,
+        engine: "native",
+      },
+      {
+        id: "task-2",
+        title: "02 - 命令桥接",
+        output_file: "D:\\Videos\\bilibili\\Rust 桌面应用入门\\02 - 命令桥接.mp4",
+        state: "downloading",
+        bytes_downloaded: 50,
+        bytes_total: 100,
+        retry_count: 0,
+        max_retries: 3,
+        quality: "1080p",
+        used_login: true,
+        engine: "native",
+      },
+    ],
+  };
+}
 
 describe("renderApp", () => {
   let root: HTMLDivElement;
@@ -127,6 +129,7 @@ describe("renderApp", () => {
   });
 
   test("renders created collection children with output, progress, and retries", async () => {
+    const createdCollection = createdCollectionFixture();
     const createTask = vi.fn().mockResolvedValue(createdCollection);
     const runResolvers = new Map<string, (task: CreatedTaskGroup["tasks"][number]) => void>();
     const runTask = vi.fn().mockImplementation(
@@ -175,6 +178,63 @@ describe("renderApp", () => {
       url: "https://www.bilibili.com/video/BV1xx411c7mD",
       output_dir: "D:\\Videos\\bilibili",
       has_login: false,
+    });
+  });
+
+  test("polls persisted task groups while a task is running", async () => {
+    const baseCollection = createdCollectionFixture();
+    const createdCollection = {
+      ...baseCollection,
+      tasks: [baseCollection.tasks[0]],
+    };
+    const createTask = vi.fn().mockResolvedValue(createdCollection);
+    let resolveRunTask: (task: CreatedTaskGroup["tasks"][number]) => void = () => {};
+    const runTask = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRunTask = resolve;
+        }),
+    );
+    const listTaskGroups = vi.fn().mockResolvedValue([
+      {
+        ...createdCollection,
+        tasks: [
+          {
+            ...createdCollection.tasks[0],
+            state: "downloading",
+            bytes_downloaded: 75,
+            bytes_total: 100,
+          },
+        ],
+      },
+    ]);
+    renderApp(root, createInitialState(), {
+      createTask,
+      runTask,
+      listTaskGroups,
+      progressPollMs: 20,
+    });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV1xx411c7mD";
+    root.querySelector<HTMLButtonElement>("[data-testid='add-task']")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("01 - 安装 Tauri");
+    });
+    await vi.waitFor(() => {
+      expect(listTaskGroups).toHaveBeenCalled();
+      expect(root.textContent).toContain("75%");
+    });
+
+    resolveRunTask({
+      ...createdCollection.tasks[0],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("100%");
     });
   });
 

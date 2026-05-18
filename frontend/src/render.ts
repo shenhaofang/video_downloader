@@ -2,6 +2,7 @@ import {
   clearBilibiliLogin as defaultClearBilibiliLogin,
   createTask as defaultCreateTask,
   getToolStatus as defaultGetToolStatus,
+  listTaskGroups as defaultListTaskGroups,
   pollBilibiliLogin as defaultPollBilibiliLogin,
   runTask as defaultRunTask,
   saveConfig as defaultSaveConfig,
@@ -26,6 +27,8 @@ export interface RenderDependencies {
   pollBilibiliLogin?: typeof defaultPollBilibiliLogin;
   clearBilibiliLogin?: typeof defaultClearBilibiliLogin;
   getToolStatus?: typeof defaultGetToolStatus;
+  listTaskGroups?: typeof defaultListTaskGroups;
+  progressPollMs?: number;
 }
 
 export function renderApp(
@@ -40,6 +43,8 @@ export function renderApp(
   const pollBilibiliLogin = dependencies.pollBilibiliLogin ?? defaultPollBilibiliLogin;
   const clearBilibiliLogin = dependencies.clearBilibiliLogin ?? defaultClearBilibiliLogin;
   const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
+  const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
+  const progressPollMs = dependencies.progressPollMs ?? 1000;
   root.replaceChildren(
     buildAppShell(root, state, {
       createTask,
@@ -49,6 +54,8 @@ export function renderApp(
       pollBilibiliLogin,
       clearBilibiliLogin,
       getToolStatus,
+      listTaskGroups,
+      progressPollMs,
     }),
   );
 }
@@ -64,7 +71,7 @@ function buildAppShell(
   const nav = element("nav", "nav");
 
   const panels = element("section", "workspace");
-  const downloads = buildDownloadsPanel(state, dependencies.createTask, dependencies.runTask);
+  const downloads = buildDownloadsPanel(state, dependencies);
   const login = buildLoginPanel(root, state, dependencies);
   const settings = buildSettingsPanel(root, state, dependencies);
   panels.append(downloads, login, settings);
@@ -99,8 +106,7 @@ function buildAppShell(
 
 function buildDownloadsPanel(
   state: AppState,
-  createTask: typeof defaultCreateTask,
-  runTask: typeof defaultRunTask,
+  dependencies: Required<RenderDependencies>,
 ): HTMLElement {
   const panel = element("section", "panel");
   panel.dataset.panel = "downloads";
@@ -125,20 +131,68 @@ function buildDownloadsPanel(
     const outputDir =
       form.querySelector<HTMLInputElement>("[data-testid='output-directory']")?.value ??
       taskOutputDirectory(state.settings.downloadRoot);
-    const created = await createTask({ url, output_dir: outputDir, has_login: false });
+    const created = await dependencies.createTask({ url, output_dir: outputDir, has_login: false });
     state.taskGroups.unshift(created);
-    taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
+    renderTaskList(taskList, state);
     for (const task of created.tasks) {
-      const updated = await runTask({ task_id: task.id });
+      const updated = await runTaskWithProgressPolling(state, taskList, task.id, {
+        runTask: dependencies.runTask,
+        listTaskGroups: dependencies.listTaskGroups,
+        progressPollMs: dependencies.progressPollMs,
+      });
       replaceTask(state, updated);
-      taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
+      renderTaskList(taskList, state);
     }
   });
 
   const taskList = element("div", "task-list");
-  taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
+  renderTaskList(taskList, state);
   panel.append(title, form, taskList);
   return panel;
+}
+
+async function runTaskWithProgressPolling(
+  state: AppState,
+  taskList: HTMLElement,
+  taskId: string,
+  dependencies: Pick<Required<RenderDependencies>, "runTask" | "listTaskGroups" | "progressPollMs">,
+): Promise<DownloadTask> {
+  let isPolling = false;
+  const intervalId = window.setInterval(async () => {
+    if (isPolling) {
+      return;
+    }
+    isPolling = true;
+    try {
+      const persistedGroups = await dependencies.listTaskGroups();
+      mergePersistedTaskGroups(state, persistedGroups);
+      renderTaskList(taskList, state);
+    } catch (error) {
+      console.error("Failed to refresh task progress", error);
+    } finally {
+      isPolling = false;
+    }
+  }, dependencies.progressPollMs);
+
+  try {
+    return await dependencies.runTask({ task_id: taskId });
+  } finally {
+    window.clearInterval(intervalId);
+  }
+}
+
+function mergePersistedTaskGroups(state: AppState, persistedGroups: CreatedTaskGroup[]): void {
+  if (persistedGroups.length === 0) {
+    return;
+  }
+  const persistedById = new Map(persistedGroups.map((group) => [group.group.id, group]));
+  state.taskGroups = state.taskGroups.map(
+    (current) => persistedById.get(current.group.id) ?? current,
+  );
+}
+
+function renderTaskList(taskList: HTMLElement, state: AppState): void {
+  taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
 }
 
 function replaceTask(state: AppState, updated: DownloadTask): void {
