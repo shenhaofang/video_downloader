@@ -76,6 +76,35 @@ pub fn sidecar_base_name(tool: &str) -> AppResult<&'static str> {
     }
 }
 
+pub fn merge_with_ffmpeg(
+    ffmpeg_path: &Path,
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> AppResult<()> {
+    let output = std::process::Command::new(ffmpeg_path)
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-i")
+        .arg(video_path)
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-c")
+        .arg("copy")
+        .arg(output_path)
+        .output()
+        .map_err(|err| AppError::structured(ErrorCode::FfmpegError, err.to_string()))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AppError::structured(
+            ErrorCode::FfmpegError,
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +187,42 @@ mod tests {
             sidecar_base_name("yt-dlp").unwrap_err().code(),
             ErrorCode::EngineMissing
         );
+    }
+
+    #[test]
+    fn merge_requires_configured_ffmpeg_binary() {
+        let err = merge_with_ffmpeg(
+            Path::new("missing-ffmpeg.exe"),
+            Path::new("video.m4s"),
+            Path::new("audio.m4s"),
+            Path::new("output.mp4"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::FfmpegError);
+    }
+
+    #[test]
+    fn merge_maps_ffmpeg_failure_to_ffmpeg_error() {
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let ffmpeg = dir.join("fake-ffmpeg.bat");
+        fs::write(
+            &ffmpeg,
+            "@echo off\r\necho merge failed 1>&2\r\nexit /b 7\r\n",
+        )
+        .unwrap();
+
+        let err = merge_with_ffmpeg(
+            &ffmpeg,
+            Path::new("video.m4s"),
+            Path::new("audio.m4s"),
+            Path::new("output.mp4"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::FfmpegError);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

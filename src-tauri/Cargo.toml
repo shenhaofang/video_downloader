@@ -21,10 +21,11 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "chrono", "uuid"] }
-reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "rustls-tls", "stream"] }
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
 directories = "5"
 sanitize-filename = "0.6"
 tauri-plugin-shell = "2"
+futures-util = "0.3"

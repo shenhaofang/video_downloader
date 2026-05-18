@@ -2804,15 +2804,15 @@ git commit -m "feat: parse bilibili view metadata"
 - Modify: `src-tauri/src/media.rs`
 - Test: `src-tauri/src/platform/bilibili/media.rs`
 
-- [ ] **Step 1: Add stream dependency**
+- [x] **Step 1: Add stream dependency**
 
-Modify `src-tauri/Cargo.toml` and add:
+Modify `src-tauri/Cargo.toml` and add if stream-by-stream downloads are implemented in this task:
 
 ```toml
 futures-util = "0.3"
 ```
 
-- [ ] **Step 2: Add playurl parser**
+- [x] **Step 2: Add playurl parser**
 
 Create `src-tauri/src/platform/bilibili/media.rs`:
 
@@ -2920,7 +2920,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Wire media module**
+- [x] **Step 3: Wire media module**
 
 Modify `src-tauri/src/platform/bilibili/mod.rs`:
 
@@ -2931,9 +2931,9 @@ pub mod native;
 pub mod yt_dlp;
 ```
 
-- [ ] **Step 4: Implement native download path**
+- [x] **Step 4: Implement native download boundaries**
 
-Modify `NativeBilibiliDownloader::download` to:
+Modify `NativeBilibiliDownloader::download` when task metadata carries `cid` / stream URLs and bundled ffmpeg binaries are configured. In this pass, add the tested foundations needed by that path:
 
 1. Emit a log line for selected item.
 2. Download video stream and audio stream to temporary `.m4s` files.
@@ -2948,7 +2948,7 @@ async fn download_to_file(client: &reqwest::Client, url: &str, path: &std::path:
 
 The helper must map request failures to `network_error` and filesystem failures to `filesystem_error`.
 
-- [ ] **Step 5: Run media parser tests**
+- [x] **Step 5: Run media parser tests**
 
 ```powershell
 cd src-tauri
@@ -2957,7 +2957,18 @@ cargo test bilibili::media
 
 Expected: media parser tests pass without network.
 
-- [ ] **Step 6: Commit native media foundation**
+Task 16 review notes:
+- RED: `cargo test bilibili::media` first had zero tests; parser tests then failed because `parse_dash_selection` and `quality_label` did not exist.
+- GREEN: `cargo test bilibili::media` passed after the playurl DASH parser selected highest-bandwidth video/audio streams and rejected missing DASH data.
+- RED: download helper tests failed until `download_to_file` mapped HTTP failures to `NetworkError`, file-write failures to `FilesystemError`, wrote local files, and emitted progress.
+- RED: ffmpeg boundary test failed until `merge_with_ffmpeg` mapped missing or failing ffmpeg execution to `FfmpegError`.
+- RED: quality review found `download_to_file` buffered whole media responses in memory, so it now streams response chunks to disk and emits cumulative progress.
+- RED: quality review found real Bilibili DASH streams may use `baseUrl`, so `DashStream.base_url` now accepts both `base_url` and `baseUrl`.
+- GREEN: local one-shot HTTP tests cover stream downloads and HTTP error mapping without external network.
+- Scope correction: full `NativeBilibiliDownloader::download` is not wired in this task because current `DownloadItem` does not carry `cid` or stream URLs, and no bundled ffmpeg sidecar binary / `externalBin` package entry exists yet. This task intentionally adds the parser and executable boundaries without pretending end-to-end media download is functional.
+- Verification: `cargo test bilibili::media`, `cargo test`, `cargo check`, `cargo fmt --check`, `cargo clippy -- -D warnings`, and `git diff --check` all exited 0.
+
+- [x] **Step 6: Commit native media foundation**
 
 ```powershell
 git add src-tauri/Cargo.toml src-tauri/src/platform/bilibili src-tauri/src/media.rs
