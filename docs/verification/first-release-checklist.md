@@ -38,7 +38,7 @@
 - [x] Missing `yt-dlp` reports `engine_missing`.
 - [x] `yt-dlp` adapter can execute a configured local binary.
 - [x] Bundled `ffmpeg` and `ffprobe` status is visible.
-- [ ] FFmpeg license profile is recorded before public distribution.
+- [x] FFmpeg license profile is recorded before public distribution.
 
 ## Login
 
@@ -53,4 +53,4 @@
 - Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and shown in the UI, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, live progress streaming, and background concurrency scheduling.
 - `create_task` uses real native bilibili probe by default and persists created records; the frontend now triggers `run_task` for created child tasks and reloads persisted history on startup, but it still does not stream in-flight progress.
 - Startup login verification now checks stored bilibili cookies during the existing login status load, clears confirmed-invalid cookies, and preserves sessions as `待验证` when the network is unavailable.
-- Bundled `ffmpeg` / `ffprobe` binaries, `externalBin` entries, and license profile are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build.
+- Bundled `ffmpeg` / `ffprobe` binaries and `externalBin` entries are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build. The license profile is recorded in `docs/distribution/ffmpeg-license-profile.md`.
