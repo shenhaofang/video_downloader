@@ -1,4 +1,5 @@
 pub mod events;
+pub mod executor;
 pub mod queue;
 
 use crate::errors::AppResult;

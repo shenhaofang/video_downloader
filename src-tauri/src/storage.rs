@@ -149,6 +149,39 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn update_task(&self, task: &DownloadTask) -> AppResult<()> {
+        let result = sqlx::query(
+            "UPDATE download_tasks SET title = ?, output_file = ?, state = ?, engine = ?, quality = ?, used_login = ?, bytes_downloaded = ?, bytes_total = ?, retry_count = ?, max_retries = ?, error_code = ?, error_message = ?, bvid = ?, cid = ?, page = ? WHERE id = ?",
+        )
+        .bind(&task.title)
+        .bind(&task.output_file)
+        .bind(state_name(task.state))
+        .bind(engine_name(task.engine))
+        .bind(&task.quality)
+        .bind(if task.used_login { 1_i64 } else { 0_i64 })
+        .bind(task.bytes_downloaded as i64)
+        .bind(task.bytes_total.map(|value| value as i64))
+        .bind(task.retry_count as i64)
+        .bind(task.max_retries as i64)
+        .bind(&task.error_code)
+        .bind(&task.error_message)
+        .bind(&task.bvid)
+        .bind(task.cid.map(|value| value as i64))
+        .bind(task.page.map(|value| value as i64))
+        .bind(task.id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::structured(
+                ErrorCode::FilesystemError,
+                "download task not found",
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn load_tasks_for_group(&self, group_id: Uuid) -> AppResult<Vec<DownloadTask>> {
         let rows = sqlx::query(
             "SELECT id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message, bvid, cid, page FROM download_tasks WHERE group_id = ? ORDER BY rowid",
@@ -171,6 +204,16 @@ impl Storage {
             .map_err(storage_error)?;
 
         Ok(())
+    }
+
+    pub async fn load_logs_for_task(&self, task_id: Uuid) -> AppResult<Vec<String>> {
+        let rows = sqlx::query("SELECT line FROM task_logs WHERE task_id = ? ORDER BY id")
+            .bind(task_id.to_string())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(storage_error)?;
+
+        Ok(rows.into_iter().map(|row| row.get("line")).collect())
     }
 
     pub async fn close(self) {
@@ -393,7 +436,89 @@ mod tests {
 
         let loaded = storage.load_tasks_for_group(group.id).await.unwrap();
         assert_eq!(loaded, vec![task]);
+        let logs = storage.load_logs_for_task(loaded[0].id).await.unwrap();
+        assert_eq!(logs, vec!["[task] queued".to_string()]);
 
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn updates_existing_task() {
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
+        let group = TaskGroup {
+            id: Uuid::new_v4(),
+            source_url: String::from("https://www.bilibili.com/video/BV1xx411c7mD"),
+            platform: String::from("bilibili"),
+            title: String::from("Rust desktop app"),
+            output_dir: String::from("D:\\Videos"),
+            engine: DownloadEngine::Native,
+            state: TaskState::Queued,
+            created_at: Utc::now(),
+        };
+        let mut task = DownloadTask {
+            id: Uuid::new_v4(),
+            group_id: group.id,
+            title: String::from("Part 1"),
+            output_file: String::from("D:\\Videos\\part-1.mp4"),
+            state: TaskState::Queued,
+            engine: DownloadEngine::Native,
+            quality: Some(String::from("720P")),
+            used_login: false,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            retry_count: 0,
+            max_retries: 3,
+            error_code: None,
+            error_message: None,
+            bvid: Some("BV1xx411c7mD".into()),
+            cid: Some(111),
+            page: Some(1),
+        };
+        storage.insert_group(&group).await.unwrap();
+        storage.insert_task(&task).await.unwrap();
+
+        task.state = TaskState::Failed;
+        task.bytes_downloaded = 512;
+        task.bytes_total = Some(1024);
+        task.retry_count = 1;
+        task.error_code = Some("network_error".into());
+        task.error_message = Some("download failed".into());
+        storage.update_task(&task).await.unwrap();
+
+        let loaded = storage.load_tasks_for_group(group.id).await.unwrap();
+        assert_eq!(loaded, vec![task]);
+
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn update_task_rejects_missing_task_id() {
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
+        let task = DownloadTask {
+            id: Uuid::new_v4(),
+            group_id: Uuid::new_v4(),
+            title: String::from("Part 1"),
+            output_file: String::from("D:\\Videos\\part-1.mp4"),
+            state: TaskState::Queued,
+            engine: DownloadEngine::Native,
+            quality: None,
+            used_login: false,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            retry_count: 0,
+            max_retries: 3,
+            error_code: None,
+            error_message: None,
+            bvid: None,
+            cid: None,
+            page: None,
+        };
+
+        let err = storage.update_task(&task).await.unwrap_err();
+
+        assert_eq!(err.code(), crate::errors::ErrorCode::FilesystemError);
         db.close().await;
     }
 
