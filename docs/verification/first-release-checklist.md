@@ -45,12 +45,12 @@
 - [x] Bilibili QR generation returns a `qrcode_key`.
 - [x] Bilibili QR poll maps pending, scanned, expired, and confirmed states.
 - [x] Confirmed QR poll stores cookies in the encrypted local session file.
-- [ ] Stored login state is verified on startup.
+- [x] Stored login state is verified on startup.
 
 ## Known Gaps
 
 - The real frontend exposes manual QR-code login controls in the expanded bilibili login detail; automatic polling and rendered QR images are still deferred.
 - Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and shown in the UI, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, live progress streaming, and background concurrency scheduling.
 - `create_task` uses real native bilibili probe by default and persists created records; the frontend now triggers `run_task` for created child tasks and reloads persisted history on startup, but it still does not stream in-flight progress.
-- Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.
+- Startup login verification now checks stored bilibili cookies during the existing login status load, clears confirmed-invalid cookies, and preserves sessions as `待验证` when the network is unavailable.
 - Bundled `ffmpeg` / `ffprobe` binaries, `externalBin` entries, and license profile are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build.

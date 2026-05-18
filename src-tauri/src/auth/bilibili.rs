@@ -1,12 +1,13 @@
 use super::session_store::{SessionStore, StoredSession};
 use crate::errors::{AppError, AppResult, ErrorCode};
 use chrono::Utc;
-use reqwest::header::{HeaderMap, SET_COOKIE};
+use reqwest::header::{HeaderMap, COOKIE, SET_COOKIE, USER_AGENT};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 const QR_GENERATE_URL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
 const QR_POLL_URL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
+const LOGIN_NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LoginQr {
@@ -56,6 +57,19 @@ struct QrPollResponse {
 struct QrPollData {
     code: i32,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginVerificationResponse {
+    code: i32,
+    message: String,
+    data: Option<LoginVerificationData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginVerificationData {
+    #[serde(rename = "isLogin")]
+    is_login: bool,
 }
 
 #[derive(Clone)]
@@ -160,6 +174,25 @@ pub fn parse_qr_poll(json: &str) -> AppResult<LoginPollResult> {
     })
 }
 
+pub fn parse_login_verification(json: &str) -> AppResult<bool> {
+    let parsed: LoginVerificationResponse = serde_json::from_str(json)
+        .map_err(|err| AppError::structured(ErrorCode::PlatformChanged, err.to_string()))?;
+    if parsed.code != 0 {
+        return Err(AppError::structured(
+            ErrorCode::PlatformChanged,
+            parsed.message,
+        ));
+    }
+    let data = parsed.data.ok_or_else(|| {
+        AppError::structured(
+            ErrorCode::PlatformChanged,
+            "missing login verification data",
+        )
+    })?;
+
+    Ok(data.is_login)
+}
+
 pub async fn request_login_qr(client: &reqwest::Client) -> AppResult<LoginQr> {
     request_login_qr_from_url(client, QR_GENERATE_URL).await
 }
@@ -215,6 +248,31 @@ async fn poll_login_qr_from_url(
     }
 
     Ok(LoginPollOutcome { result, cookies })
+}
+
+pub async fn verify_login_cookies(client: &reqwest::Client, cookies: &str) -> AppResult<bool> {
+    verify_login_cookies_from_url(client, LOGIN_NAV_URL, cookies).await
+}
+
+async fn verify_login_cookies_from_url(
+    client: &reqwest::Client,
+    url: &str,
+    cookies: &str,
+) -> AppResult<bool> {
+    let text = client
+        .get(url)
+        .header(COOKIE, cookies)
+        .header(USER_AGENT, "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
+        .error_for_status()
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
+        .text()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+
+    parse_login_verification(&text)
 }
 
 fn cookie_string_from_set_cookie_headers(headers: &HeaderMap) -> Option<String> {
@@ -345,6 +403,18 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code(), crate::errors::ErrorCode::PlatformChanged);
+    }
+
+    #[test]
+    fn parses_login_verification_status() {
+        assert!(parse_login_verification(
+            r#"{"code":0,"message":"0","ttl":1,"data":{"isLogin":true,"uname":"tester"}}"#
+        )
+        .unwrap());
+        assert!(!parse_login_verification(
+            r#"{"code":0,"message":"0","ttl":1,"data":{"isLogin":false}}"#
+        )
+        .unwrap());
     }
 
     #[test]

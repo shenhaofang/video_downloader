@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::auth::bilibili::{
-    poll_login_qr, request_login_qr, LoginPollOutcome, LoginPollResult, LoginQr,
+    poll_login_qr, request_login_qr, verify_login_cookies, LoginPollOutcome, LoginPollResult,
+    LoginQr,
 };
 use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
@@ -9,6 +10,7 @@ use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
 use crate::platform::PlatformDownloader;
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,8 +80,10 @@ pub async fn run_task(
 }
 
 #[tauri::command]
-pub fn list_platform_logins(state: tauri::State<'_, AppState>) -> AppResult<Vec<PlatformLoginRow>> {
-    list_platform_logins_from_state(state.inner())
+pub async fn list_platform_logins(
+    state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<PlatformLoginRow>> {
+    list_platform_logins_from_state(state.inner()).await
 }
 
 #[tauri::command]
@@ -212,11 +216,38 @@ async fn load_task_from_command(
     state.storage.load_task(task_id).await
 }
 
-fn list_platform_logins_from_state(state: &AppState) -> AppResult<Vec<PlatformLoginRow>> {
-    let status = state.bilibili_auth.status()?;
+async fn list_platform_logins_from_state(state: &AppState) -> AppResult<Vec<PlatformLoginRow>> {
+    let client = reqwest::Client::new();
+    list_platform_logins_with_verifier_from_state(state, |cookies| {
+        let client = client.clone();
+        async move { verify_login_cookies(&client, &cookies).await }
+    })
+    .await
+}
+
+async fn list_platform_logins_with_verifier_from_state<F, Fut>(
+    state: &AppState,
+    verifier: F,
+) -> AppResult<Vec<PlatformLoginRow>>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = AppResult<bool>>,
+{
+    let status = match state.bilibili_auth.load_cookie_string()? {
+        Some(cookies) => match verifier(cookies).await {
+            Ok(true) => "已登录",
+            Ok(false) => {
+                state.bilibili_auth.clear()?;
+                "未登录"
+            }
+            Err(err) if err.code() == crate::errors::ErrorCode::NetworkError => "待验证",
+            Err(err) => return Err(err),
+        },
+        None => "未登录",
+    };
     Ok(vec![PlatformLoginRow {
-        platform: status.platform,
-        status: status.status,
+        platform: "bilibili".into(),
+        status: status.into(),
     }])
 }
 
@@ -477,7 +508,7 @@ mod tests {
     #[tokio::test]
     async fn exposes_flat_platform_login_rows() {
         let state = command_test_state().await;
-        let rows = list_platform_logins_from_state(&state).unwrap();
+        let rows = list_platform_logins_from_state(&state).await.unwrap();
 
         assert_eq!(
             rows,
@@ -623,14 +654,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_platform_logins_reads_bilibili_auth_status_from_app_state() {
+    async fn list_platform_logins_verifies_bilibili_auth_status_from_app_state() {
         let state = command_test_state().await;
         state
             .bilibili_auth
             .save_cookie_string("SESSDATA=auth-cookie".into())
             .unwrap();
 
-        let rows = list_platform_logins_from_state(&state).unwrap();
+        let rows = list_platform_logins_with_verifier_from_state(&state, |cookies| async move {
+            Ok(cookies == "SESSDATA=auth-cookie")
+        })
+        .await
+        .unwrap();
 
         assert_eq!(
             rows,
@@ -638,6 +673,61 @@ mod tests {
                 platform: "bilibili".into(),
                 status: "已登录".into(),
             }]
+        );
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn list_platform_logins_clears_invalid_bilibili_auth_status() {
+        let state = command_test_state().await;
+        state
+            .bilibili_auth
+            .save_cookie_string("SESSDATA=expired-cookie".into())
+            .unwrap();
+
+        let rows =
+            list_platform_logins_with_verifier_from_state(&state, |_cookies| async { Ok(false) })
+                .await
+                .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![PlatformLoginRow {
+                platform: "bilibili".into(),
+                status: "未登录".into(),
+            }]
+        );
+        assert!(state.bilibili_auth.load_cookie_string().unwrap().is_none());
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn list_platform_logins_keeps_session_when_verification_network_fails() {
+        let state = command_test_state().await;
+        state
+            .bilibili_auth
+            .save_cookie_string("SESSDATA=auth-cookie".into())
+            .unwrap();
+
+        let rows = list_platform_logins_with_verifier_from_state(&state, |_cookies| async {
+            Err(crate::errors::AppError::structured(
+                crate::errors::ErrorCode::NetworkError,
+                "offline",
+            ))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![PlatformLoginRow {
+                platform: "bilibili".into(),
+                status: "待验证".into(),
+            }]
+        );
+        assert_eq!(
+            state.bilibili_auth.load_cookie_string().unwrap(),
+            Some("SESSDATA=auth-cookie".into())
         );
         cleanup_state(state).await;
     }
