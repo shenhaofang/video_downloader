@@ -2654,7 +2654,7 @@ git commit -m "feat: constrain bundled media tool execution"
 - Modify: `src-tauri/src/platform/bilibili/native.rs`
 - Test: `src-tauri/src/platform/bilibili/api.rs`
 
-- [ ] **Step 1: Add fixture-driven API parser**
+- [x] **Step 1: Add fixture-driven API parser**
 
 Create `src-tauri/src/platform/bilibili/api.rs`:
 
@@ -2741,7 +2741,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Wire native probe to view parser**
+- [x] **Step 2: Wire native probe to view parser**
 
 Modify `src-tauri/src/platform/bilibili/mod.rs`:
 
@@ -2767,7 +2767,7 @@ async fn fetch_view_info(client: &reqwest::Client, bvid: &str) -> AppResult<crat
 }
 ```
 
-- [ ] **Step 3: Run API tests**
+- [x] **Step 3: Run API tests**
 
 ```powershell
 cd src-tauri
@@ -2776,7 +2776,18 @@ cargo test bilibili::api
 
 Expected: fixture parser tests pass without network.
 
-- [ ] **Step 4: Commit API parser**
+Task 15 review notes:
+- RED: `cargo test bilibili::api` first failed because `VideoPage`, `parse_view_info`, and `view_info_url` did not exist.
+- RED: native mapping tests failed until `ViewInfo` pages were converted into real `ProbeResult` items and single-video output names avoided a forced `01 -` prefix.
+- RED: ignored live fetch test failed to compile until `fetch_view_info` was added and `NativeBilibiliDownloader::probe` used it.
+- RED: a real Bilibili view API check showed single-page `part` can be empty, so parser coverage now falls back to the video title for that case.
+- RED: quality review found empty `pages` could create an empty task group, so `parse_view_info` now rejects missing page data.
+- RED: quality review found HTTP 4xx/5xx responses were parsed as platform changes, so `fetch_view_info` now maps non-2xx status to `NetworkError` with a local one-shot HTTP test.
+- GREEN: `cargo test bilibili::api`, `cargo test bilibili`, and `cargo test live_fetch_view_info_returns_pages -- --ignored` passed.
+- Verification: `cargo test`, `cargo check`, `cargo fmt --check`, `cargo clippy -- -D warnings`, and `git diff --check` all exited 0.
+- Scope note: media download/merge still returns the existing media-API placeholder error; Task 15 only replaces native probe metadata with real view metadata.
+
+- [x] **Step 4: Commit API parser**
 
 ```powershell
 git add src-tauri/src/platform/bilibili

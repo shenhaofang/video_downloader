@@ -67,6 +67,60 @@ fn is_valid_bvid(value: &str) -> bool {
         && value.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
+fn probe_result_from_view_info(
+    info: crate::platform::bilibili::api::ViewInfo,
+    has_login: bool,
+) -> ProbeResult {
+    let quality = if has_login { "1080P" } else { "720P" };
+    let is_collection = info.pages.len() > 1;
+    let items = info
+        .pages
+        .into_iter()
+        .map(|page| DownloadItem {
+            title: page.title.clone(),
+            output_file: if is_collection {
+                format!("{:02} - {}.mp4", page.page, page.title)
+            } else {
+                format!("{}.mp4", page.title)
+            },
+            quality: Some(quality.into()),
+            requires_login: has_login,
+            bytes_total: None,
+        })
+        .collect();
+
+    ProbeResult {
+        group_title: info.title,
+        items,
+        used_login: has_login,
+    }
+}
+
+async fn fetch_view_info(
+    client: &reqwest::Client,
+    bvid: &str,
+) -> AppResult<crate::platform::bilibili::api::ViewInfo> {
+    fetch_view_info_from_url(client, &crate::platform::bilibili::api::view_info_url(bvid)).await
+}
+
+async fn fetch_view_info_from_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> AppResult<crate::platform::bilibili::api::ViewInfo> {
+    let text = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
+        .error_for_status()
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
+        .text()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+
+    crate::platform::bilibili::api::parse_view_info(&text)
+}
+
 #[derive(Default)]
 pub struct NativeBilibiliDownloader;
 
@@ -77,19 +131,10 @@ impl PlatformDownloader for NativeBilibiliDownloader {
     ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
         Box::pin(async move {
             let id = parse_bvid(&input.url)?;
-            let quality = if input.has_login { "1080P" } else { "720P" };
+            let client = reqwest::Client::new();
+            let info = fetch_view_info(&client, &id.bvid).await?;
 
-            Ok(ProbeResult {
-                group_title: format!("bilibili {}", id.bvid),
-                items: vec![DownloadItem {
-                    title: format!("{} P1", id.bvid),
-                    output_file: format!("{} P1.mp4", id.bvid),
-                    quality: Some(quality.into()),
-                    requires_login: input.has_login,
-                    bytes_total: None,
-                }],
-                used_login: input.has_login,
-            })
+            Ok(probe_result_from_view_info(info, input.has_login))
         })
     }
 
@@ -111,7 +156,10 @@ impl PlatformDownloader for NativeBilibiliDownloader {
 mod tests {
     use super::*;
     use crate::models::DownloadEngine;
+    use crate::platform::bilibili::api::{VideoPage, ViewInfo};
     use crate::platform::{DownloadItem, EventSink};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     struct NoopSink;
 
@@ -205,44 +253,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_returns_p0_placeholder_for_logged_in_video() {
-        let downloader = NativeBilibiliDownloader;
+    async fn maps_view_info_to_probe_items_for_logged_in_collection() {
+        let result = probe_result_from_view_info(
+            ViewInfo {
+                title: "Rust 桌面应用入门".into(),
+                pages: vec![
+                    VideoPage {
+                        cid: 111,
+                        page: 1,
+                        title: "安装 Tauri".into(),
+                    },
+                    VideoPage {
+                        cid: 222,
+                        page: 2,
+                        title: "Rust 命令与事件".into(),
+                    },
+                ],
+            },
+            true,
+        );
 
-        let result = downloader
-            .probe(ProbeInput {
-                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
-                engine: DownloadEngine::Native,
-                has_login: true,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(result.group_title, "bilibili BV1xx411c7mD");
+        assert_eq!(result.group_title, "Rust 桌面应用入门");
         assert!(result.used_login);
-        assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].title, "BV1xx411c7mD P1");
-        assert_eq!(result.items[0].output_file, "BV1xx411c7mD P1.mp4");
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.items[0].title, "安装 Tauri");
+        assert_eq!(result.items[0].output_file, "01 - 安装 Tauri.mp4");
         assert_eq!(result.items[0].quality, Some("1080P".into()));
         assert!(result.items[0].requires_login);
         assert_eq!(result.items[0].bytes_total, None);
     }
 
-    #[tokio::test]
-    async fn probe_returns_720p_placeholder_without_login() {
-        let downloader = NativeBilibiliDownloader;
-
-        let result = downloader
-            .probe(ProbeInput {
-                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
-                engine: DownloadEngine::Native,
-                has_login: false,
-            })
-            .await
-            .unwrap();
+    #[test]
+    fn maps_view_info_to_720p_without_login() {
+        let result = probe_result_from_view_info(
+            ViewInfo {
+                title: "B站下载链路测试".into(),
+                pages: vec![VideoPage {
+                    cid: 111,
+                    page: 1,
+                    title: "B站下载链路测试".into(),
+                }],
+            },
+            false,
+        );
 
         assert_eq!(result.items[0].quality, Some("720P".into()));
+        assert_eq!(result.items[0].output_file, "B站下载链路测试.mp4");
         assert!(!result.items[0].requires_login);
         assert!(!result.used_login);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_fetch_view_info_returns_pages() {
+        let client = reqwest::Client::new();
+
+        let info = fetch_view_info(&client, "BV1xx411c7mD").await.unwrap();
+
+        assert!(!info.title.is_empty());
+        assert!(!info.pages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_view_info_maps_http_error_status_to_network_error() {
+        let client = reqwest::Client::new();
+        let url = one_shot_http_url("500 Internal Server Error", r#"{"code":0}"#);
+
+        let err = fetch_view_info_from_url(&client, &url).await.unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::NetworkError);
     }
 
     #[tokio::test]
@@ -284,5 +363,24 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), ErrorCode::PlatformChanged);
+    }
+
+    fn one_shot_http_url(status: &str, body: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let status = status.to_string();
+        let body = body.to_string();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        format!("http://{address}/view")
     }
 }
