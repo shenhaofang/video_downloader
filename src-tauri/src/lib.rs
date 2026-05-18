@@ -14,6 +14,8 @@ pub fn run() {
             commands::get_config,
             commands::create_task,
             commands::list_platform_logins,
+            commands::start_bilibili_login,
+            commands::clear_bilibili_login,
             commands::get_tool_status
         ])
         .run(tauri::generate_context!())

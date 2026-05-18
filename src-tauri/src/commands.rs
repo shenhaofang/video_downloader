@@ -1,3 +1,5 @@
+use crate::auth::bilibili::{BilibiliAuth, LoginQr};
+use crate::auth::session_store::SessionStore;
 use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
@@ -53,6 +55,20 @@ pub fn list_platform_logins() -> AppResult<Vec<PlatformLoginRow>> {
 }
 
 #[tauri::command]
+pub async fn start_bilibili_login() -> AppResult<LoginQr> {
+    let auth = BilibiliAuth::new(SessionStore::new(std::env::temp_dir().join(format!(
+        "video-downloader-login-shell-{}",
+        uuid::Uuid::new_v4()
+    ))));
+    Ok(auth.create_mock_qr())
+}
+
+#[tauri::command]
+pub async fn clear_bilibili_login() -> AppResult<()> {
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_tool_status() -> AppResult<ToolStatus> {
     Ok(tool_status_from_config(&get_config()?))
 }
@@ -105,6 +121,31 @@ mod tests {
                 status: "未登录".into(),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn start_bilibili_login_returns_mock_qr() {
+        let qr = start_bilibili_login().await.unwrap();
+
+        assert_eq!(qr.qrcode_key, "mock-qrcode-key");
+        assert!(qr.url.starts_with("https://passport.bilibili.com/"));
+    }
+
+    #[tokio::test]
+    async fn clear_bilibili_login_does_not_touch_external_session_before_app_state() {
+        let dir = std::env::temp_dir().join(format!(
+            "video-downloader-external-session-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let auth = BilibiliAuth::new(SessionStore::new(dir.clone()));
+        auth.save_cookie_string("SESSDATA=auth-cookie".into())
+            .unwrap();
+        assert_eq!(auth.status().unwrap().status, "已登录");
+
+        clear_bilibili_login().await.unwrap();
+
+        assert_eq!(auth.status().unwrap().status, "已登录");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

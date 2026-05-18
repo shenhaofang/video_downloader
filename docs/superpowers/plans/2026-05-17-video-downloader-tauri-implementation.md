@@ -2334,7 +2334,7 @@ git commit -m "feat: add yt-dlp fallback status"
 - Modify: `src-tauri/src/commands.rs`
 - Test: `src-tauri/src/auth/bilibili.rs`
 
-- [ ] **Step 1: Add QR login state structs**
+- [x] **Step 1: Add QR login state structs**
 
 Modify `src-tauri/src/auth/bilibili.rs`:
 
@@ -2411,38 +2411,45 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Add login commands**
+- [x] **Step 2: Add login commands**
 
-Modify `src-tauri/src/commands.rs` and add commands that use an app-data session directory before `AppState` replaces this construction in Task 13:
+Modify `src-tauri/src/commands.rs` and add stateless shell commands before `AppState` replaces them in Task 13:
 
 ```rust
 #[tauri::command]
 pub async fn start_bilibili_login() -> AppResult<crate::auth::bilibili::LoginQr> {
-    let dir = std::env::temp_dir().join("video-downloader-session");
+    let dir = std::env::temp_dir().join(format!("video-downloader-login-shell-{}", uuid::Uuid::new_v4()));
     let auth = crate::auth::bilibili::BilibiliAuth::new(crate::auth::session_store::SessionStore::new(dir));
     Ok(auth.create_mock_qr())
 }
 
 #[tauri::command]
 pub async fn clear_bilibili_login() -> AppResult<()> {
-    let dir = std::env::temp_dir().join("video-downloader-session");
-    let auth = crate::auth::bilibili::BilibiliAuth::new(crate::auth::session_store::SessionStore::new(dir));
-    auth.clear()
+    Ok(())
 }
 ```
 
 Register both commands in `tauri::generate_handler!`.
 
-- [ ] **Step 3: Run auth command tests**
+- [x] **Step 3: Run auth command tests**
 
 ```powershell
 cd src-tauri
-cargo test auth commands
+cargo test auth
+cargo test commands::tests
 ```
 
 Expected: auth and command tests pass.
 
-- [ ] **Step 4: Commit QR login shell**
+Task 12 review notes:
+- RED: `cargo test auth` first failed because `LoginStatus`, `create_mock_qr`, and `status` were missing.
+- RED: `cargo test commands::tests` first failed because `start_bilibili_login` and `clear_bilibili_login` were missing.
+- RED: fixed temp session hardening test failed while `clear_bilibili_login` still cleared `std::env::temp_dir()/video-downloader-session`.
+- RED: test-pollution review then found the hardening test still touched the same fixed temp path, so the test was changed to use a unique external session directory.
+- GREEN: `cargo test auth` passed 10 tests and `cargo test commands::tests` passed 7 tests after the stateless command shell was implemented.
+- Follow-up for Task 13: replace the stateless command shell with managed app-data state so `start_bilibili_login` and `clear_bilibili_login` use the durable encrypted session store.
+
+- [x] **Step 4: Commit QR login shell**
 
 ```powershell
 git add src-tauri/src/auth src-tauri/src/commands.rs src-tauri/src/lib.rs
