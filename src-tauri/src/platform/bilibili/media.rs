@@ -5,6 +5,9 @@ use serde::Deserialize;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 
+const BILIBILI_REFERER: &str = "https://www.bilibili.com";
+const BILIBILI_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaStream {
     pub url: String,
@@ -99,14 +102,42 @@ pub fn quality_label(qn: u32) -> &'static str {
     }
 }
 
+pub fn playurl_url(bvid: &str, cid: u64) -> String {
+    format!("https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=4048&fourk=1")
+}
+
+pub async fn fetch_playurl_selection(
+    client: &reqwest::Client,
+    bvid: &str,
+    cid: u64,
+) -> AppResult<DashSelection> {
+    fetch_playurl_selection_from_url(client, &playurl_url(bvid, cid)).await
+}
+
+pub(crate) async fn fetch_playurl_selection_from_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> AppResult<DashSelection> {
+    let text = bilibili_get(client, url)
+        .send()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
+        .error_for_status()
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
+        .text()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+
+    parse_dash_selection(&text)
+}
+
 pub async fn download_to_file(
     client: &reqwest::Client,
     url: &str,
     path: &Path,
     sink: &dyn EventSink,
 ) -> AppResult<u64> {
-    let response = client
-        .get(url)
+    let response = bilibili_get(client, url)
         .send()
         .await
         .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
@@ -133,6 +164,13 @@ pub async fn download_to_file(
         .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
 
     Ok(downloaded)
+}
+
+fn bilibili_get(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, BILIBILI_USER_AGENT)
+        .header(reqwest::header::REFERER, BILIBILI_REFERER)
 }
 
 #[cfg(test)]
@@ -218,6 +256,61 @@ mod tests {
         assert_eq!(quality_label(0), "unknown");
     }
 
+    #[test]
+    fn builds_playurl_url_for_dash_request() {
+        let url = playurl_url("BV1xx411c7mD", 62131);
+
+        assert!(url.starts_with("https://api.bilibili.com/x/player/playurl?"));
+        assert!(url.contains("bvid=BV1xx411c7mD"));
+        assert!(url.contains("cid=62131"));
+        assert!(url.contains("fnval=4048"));
+        assert!(url.contains("fourk=1"));
+    }
+
+    #[tokio::test]
+    async fn fetches_playurl_selection_from_url() {
+        let url = one_shot_http_url(
+            "200 OK",
+            r#"{"code":0,"message":"OK","data":{"quality":32,"dash":{"video":[{"baseUrl":"video.m4s","bandwidth":10}],"audio":[{"baseUrl":"audio.m4s","bandwidth":5}]}}}"#
+                .as_bytes()
+                .to_vec(),
+        );
+
+        let selection = fetch_playurl_selection_from_url(&reqwest::Client::new(), &url)
+            .await
+            .unwrap();
+
+        assert_eq!(selection.quality, "480P");
+        assert_eq!(selection.video.url, "video.m4s");
+        assert_eq!(selection.audio.url, "audio.m4s");
+    }
+
+    #[tokio::test]
+    async fn maps_playurl_http_error_to_network_error() {
+        let url = one_shot_http_url("500 Internal Server Error", b"failed".to_vec());
+
+        let err = fetch_playurl_selection_from_url(&reqwest::Client::new(), &url)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::NetworkError);
+    }
+
+    #[tokio::test]
+    async fn fetch_playurl_sends_bilibili_browser_headers() {
+        let url = one_shot_bilibili_header_guard_url(
+            r#"{"code":0,"message":"OK","data":{"quality":32,"dash":{"video":[{"baseUrl":"video.m4s","bandwidth":10}],"audio":[{"baseUrl":"audio.m4s","bandwidth":5}]}}}"#
+                .as_bytes()
+                .to_vec(),
+        );
+
+        let selection = fetch_playurl_selection_from_url(&reqwest::Client::new(), &url)
+            .await
+            .unwrap();
+
+        assert_eq!(selection.quality, "480P");
+    }
+
     #[tokio::test]
     async fn downloads_stream_to_file_and_emits_progress() {
         let chunks = vec![b"media-".to_vec(), b"bytes".to_vec()];
@@ -287,6 +380,27 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn download_to_file_sends_bilibili_browser_headers() {
+        let url = one_shot_bilibili_header_guard_url(b"media-bytes".to_vec());
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("video.m4s");
+
+        let bytes = download_to_file(
+            &reqwest::Client::new(),
+            &url,
+            &target,
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes, 11);
+        assert_eq!(fs::read(&target).unwrap(), b"media-bytes");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[derive(Default)]
     struct RecordingSink {
         events: Arc<Mutex<Vec<DownloadEvent>>>,
@@ -345,6 +459,39 @@ mod tests {
             write!(stream, "0\r\n\r\n").unwrap();
         });
         format!("http://{address}/stream")
+    }
+
+    fn one_shot_bilibili_header_guard_url(body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let has_user_agent = request
+                .lines()
+                .any(|line| line.starts_with("user-agent: Mozilla/"));
+            let has_referer = request
+                .lines()
+                .any(|line| line == "referer: https://www.bilibili.com");
+            if has_user_agent && has_referer {
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            } else {
+                write!(
+                    stream,
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 7\r\nConnection: close\r\n\r\nmissing"
+                )
+                .unwrap();
+            }
+        });
+        format!("http://{address}/guarded")
     }
 
     fn temp_test_dir() -> PathBuf {

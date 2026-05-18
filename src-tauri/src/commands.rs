@@ -87,13 +87,9 @@ async fn create_task_from_state(
     let config = state.storage.load_config().await?;
     match config.default_engine {
         DownloadEngine::Native => {
-            create_task_with_downloader_from_state(
-                state,
-                input,
-                config.default_engine,
-                &NativeBilibiliDownloader,
-            )
-            .await
+            let downloader = NativeBilibiliDownloader::default();
+            create_task_with_downloader_from_state(state, input, config.default_engine, &downloader)
+                .await
         }
         DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
             crate::errors::ErrorCode::EngineMissing,

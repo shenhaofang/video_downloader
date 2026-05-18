@@ -32,7 +32,7 @@
 ## Engines And Tools
 
 - [x] Native engine parses BV links.
-- [ ] Native engine downloads a BV single video to `.mp4`.
+- [x] Native engine fetches BV playurl streams and merges a single task through a configured `ffmpeg`.
 - [x] Native engine expands multi-part bilibili videos during probe.
 - [x] Native engine returns `unsupported_content` for unsupported links.
 - [x] Missing `yt-dlp` reports `engine_missing`.
@@ -50,8 +50,8 @@
 ## Known Gaps
 
 - The real frontend still does not expose QR-code login controls. The backend commands exist, but the expanded bilibili login detail is still placeholder text.
-- Native media download is not wired end to end. The parser, streaming download helper, and ffmpeg merge boundary exist, but `NativeBilibiliDownloader::download()` still returns a staged error until task metadata carries `cid` / stream URLs and bundled ffmpeg is configured.
-- `create_task` now uses real native bilibili probe by default and persists created records, but it still only creates queued tasks; no scheduler starts real download work yet.
+- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, but the desktop runtime still lacks bundled/configured `ffmpeg` and no scheduler starts queued records from the UI yet.
+- `create_task` uses real native bilibili probe by default and persists created records, but it still only creates queued tasks; no scheduler starts real download work yet.
 - Created task records are queryable from storage, but the frontend does not reload persisted task history on startup yet.
 - Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.
 - Bundled `ffmpeg` / `ffprobe` binaries and license profile are not configured for distribution.

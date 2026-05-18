@@ -5,6 +5,7 @@ use crate::platform::{
 };
 use reqwest::Url;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,8 +128,36 @@ async fn fetch_view_info_from_url(
     crate::platform::bilibili::api::parse_view_info(&text)
 }
 
-#[derive(Default)]
-pub struct NativeBilibiliDownloader;
+pub struct NativeBilibiliDownloader {
+    client: reqwest::Client,
+    ffmpeg_path: Option<PathBuf>,
+    playurl_url_override: Option<String>,
+}
+
+impl Default for NativeBilibiliDownloader {
+    fn default() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            ffmpeg_path: None,
+            playurl_url_override: None,
+        }
+    }
+}
+
+impl NativeBilibiliDownloader {
+    #[cfg(test)]
+    fn with_media_dependencies(
+        client: reqwest::Client,
+        ffmpeg_path: Option<PathBuf>,
+        playurl_url: String,
+    ) -> Self {
+        Self {
+            client,
+            ffmpeg_path,
+            playurl_url_override: Some(playurl_url),
+        }
+    }
+}
 
 impl PlatformDownloader for NativeBilibiliDownloader {
     fn probe<'a>(
@@ -137,8 +166,7 @@ impl PlatformDownloader for NativeBilibiliDownloader {
     ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
         Box::pin(async move {
             let id = parse_bvid(&input.url)?;
-            let client = reqwest::Client::new();
-            let info = fetch_view_info(&client, &id.bvid).await?;
+            let info = fetch_view_info(&self.client, &id.bvid).await?;
 
             Ok(probe_result_from_view_info(info, &id.bvid, input.has_login))
         })
@@ -146,16 +174,96 @@ impl PlatformDownloader for NativeBilibiliDownloader {
 
     fn download<'a>(
         &'a self,
-        _input: DownloadInput,
-        _sink: &'a dyn EventSink,
+        input: DownloadInput,
+        sink: &'a dyn EventSink,
     ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
         Box::pin(async move {
-            Err(AppError::structured(
-                ErrorCode::PlatformChanged,
-                "native media download requires the media API task",
-            ))
+            let metadata = input.item.metadata.clone().ok_or_else(|| {
+                AppError::structured(ErrorCode::PlatformChanged, "missing bilibili task metadata")
+            })?;
+            let ffmpeg_path = self.ffmpeg_path.as_deref().ok_or_else(|| {
+                AppError::structured(ErrorCode::FfmpegError, "ffmpeg path is not configured")
+            })?;
+            let output_path = PathBuf::from(&input.output_path);
+
+            sink.emit(crate::platform::DownloadEvent::State("probing".into()));
+            let selection = if let Some(url) = &self.playurl_url_override {
+                crate::platform::bilibili::media::fetch_playurl_selection_from_url(
+                    &self.client,
+                    url,
+                )
+                .await?
+            } else {
+                crate::platform::bilibili::media::fetch_playurl_selection(
+                    &self.client,
+                    &metadata.bvid,
+                    metadata.cid,
+                )
+                .await?
+            };
+
+            if let Some(parent) = output_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+            {
+                crate::media::ensure_directory(parent)?;
+            }
+            let temp_dir = native_download_temp_dir(&output_path);
+            crate::media::ensure_directory(&temp_dir)?;
+            let result = async {
+                let video_path = temp_dir.join(format!("p{}-video.m4s", metadata.page));
+                let audio_path = temp_dir.join(format!("p{}-audio.m4s", metadata.page));
+
+                sink.emit(crate::platform::DownloadEvent::State(
+                    "downloading video".into(),
+                ));
+                let video_bytes = crate::platform::bilibili::media::download_to_file(
+                    &self.client,
+                    &selection.video.url,
+                    &video_path,
+                    sink,
+                )
+                .await?;
+
+                sink.emit(crate::platform::DownloadEvent::State(
+                    "downloading audio".into(),
+                ));
+                let audio_bytes = crate::platform::bilibili::media::download_to_file(
+                    &self.client,
+                    &selection.audio.url,
+                    &audio_path,
+                    sink,
+                )
+                .await?;
+
+                sink.emit(crate::platform::DownloadEvent::State("merging".into()));
+                crate::media::merge_with_ffmpeg(
+                    ffmpeg_path,
+                    &video_path,
+                    &audio_path,
+                    &output_path,
+                )?;
+
+                Ok::<_, AppError>(DownloadOutput {
+                    output_path: input.output_path,
+                    quality: Some(selection.quality),
+                    used_login: input.item.requires_login,
+                    bytes_total: Some(video_bytes + audio_bytes),
+                })
+            }
+            .await;
+            let _ = std::fs::remove_dir_all(&temp_dir);
+
+            result
         })
     }
+}
+
+fn native_download_temp_dir(output_path: &Path) -> PathBuf {
+    output_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".video-downloader-{}", uuid::Uuid::new_v4()))
 }
 
 #[cfg(test)]
@@ -163,9 +271,12 @@ mod tests {
     use super::*;
     use crate::models::DownloadEngine;
     use crate::platform::bilibili::api::{VideoPage, ViewInfo};
-    use crate::platform::{DownloadItem, EventSink};
+    use crate::platform::{DownloadEvent, DownloadItem, DownloadItemMetadata, EventSink};
+    use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
     struct NoopSink;
 
@@ -342,7 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_rejects_non_video_url() {
-        let downloader = NativeBilibiliDownloader;
+        let downloader = NativeBilibiliDownloader::default();
 
         let err = downloader
             .probe(ProbeInput {
@@ -357,8 +468,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_returns_platform_changed_until_media_api_task() {
-        let downloader = NativeBilibiliDownloader;
+    async fn download_requires_persisted_bilibili_metadata() {
+        let downloader = NativeBilibiliDownloader::default();
         let sink = NoopSink;
 
         let err = downloader
@@ -382,6 +493,105 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::PlatformChanged);
     }
 
+    #[tokio::test]
+    async fn download_requires_configured_ffmpeg_path() {
+        let downloader = NativeBilibiliDownloader::default();
+        let sink = NoopSink;
+
+        let err = downloader
+            .download(
+                DownloadInput {
+                    item: bilibili_download_item(),
+                    output_path: "D:\\Videos\\BV1xx411c7mD P1.mp4".into(),
+                },
+                &sink,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::FfmpegError);
+    }
+
+    #[tokio::test]
+    async fn download_fetches_streams_and_merges_output() {
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let video_url = one_shot_bytes_url(b"video".to_vec());
+        let audio_url = one_shot_bytes_url(b"audio!".to_vec());
+        let playurl = one_shot_http_url(
+            "200 OK",
+            &format!(
+                r#"{{"code":0,"message":"OK","data":{{"quality":32,"dash":{{"video":[{{"baseUrl":"{video_url}","bandwidth":10}}],"audio":[{{"baseUrl":"{audio_url}","bandwidth":5}}]}}}}}}"#
+            ),
+        );
+        let ffmpeg = dir.join("fake-ffmpeg.bat");
+        fs::write(&ffmpeg, "@echo off\r\necho merged>\"%~9\"\r\n").unwrap();
+        let output_path = dir.join("out.mp4");
+        let downloader = NativeBilibiliDownloader::with_media_dependencies(
+            reqwest::Client::new(),
+            Some(ffmpeg),
+            playurl,
+        );
+        let sink = RecordingSink::default();
+
+        let output = downloader
+            .download(
+                DownloadInput {
+                    item: bilibili_download_item(),
+                    output_path: output_path.to_string_lossy().to_string(),
+                },
+                &sink,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            output.output_path,
+            output_path.to_string_lossy().to_string()
+        );
+        assert_eq!(output.quality, Some("480P".into()));
+        assert_eq!(output.bytes_total, Some(11));
+        assert_eq!(fs::read_to_string(&output_path).unwrap().trim(), "merged");
+        assert!(sink
+            .events()
+            .iter()
+            .any(|event| matches!(event, DownloadEvent::State(state) if state == "merging")));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Arc<Mutex<Vec<DownloadEvent>>>,
+    }
+
+    impl RecordingSink {
+        fn events(&self) -> Vec<DownloadEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl EventSink for RecordingSink {
+        fn emit(&self, event: DownloadEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    fn bilibili_download_item() -> DownloadItem {
+        DownloadItem {
+            title: "BV1xx411c7mD P1".into(),
+            output_file: "BV1xx411c7mD P1.mp4".into(),
+            quality: Some("480P".into()),
+            requires_login: false,
+            bytes_total: None,
+            metadata: Some(DownloadItemMetadata {
+                bvid: "BV1xx411c7mD".into(),
+                cid: 62131,
+                page: 1,
+            }),
+        }
+    }
+
     fn one_shot_http_url(status: &str, body: &str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -399,5 +609,30 @@ mod tests {
             .unwrap();
         });
         format!("http://{address}/view")
+    }
+
+    fn one_shot_bytes_url(body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        format!("http://{address}/media")
+    }
+
+    fn temp_test_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "video-downloader-native-download-{}",
+            uuid::Uuid::new_v4()
+        ))
     }
 }
