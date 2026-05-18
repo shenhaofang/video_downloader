@@ -141,7 +141,27 @@ function buildDownloadsPanel(
     const created = await dependencies.createTask({ url, output_dir: outputDir, has_login: false });
     state.taskGroups.unshift(created);
     renderTaskList(taskList, state);
-    for (const task of created.tasks) {
+    await runTasksWithConcurrency(state, taskList, created.tasks, dependencies);
+  });
+
+  const taskList = element("div", "task-list");
+  renderTaskList(taskList, state);
+  panel.append(title, form, taskList);
+  return panel;
+}
+
+async function runTasksWithConcurrency(
+  state: AppState,
+  taskList: HTMLElement,
+  tasks: DownloadTask[],
+  dependencies: Required<RenderDependencies>,
+): Promise<void> {
+  let nextTaskIndex = 0;
+  const workerCount = Math.min(tasks.length, Math.max(1, state.settings.concurrency));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextTaskIndex < tasks.length) {
+      const task = tasks[nextTaskIndex];
+      nextTaskIndex += 1;
       const updated = await runTaskWithProgressPolling(state, taskList, task.id, {
         runTask: dependencies.runTask,
         listTaskGroups: dependencies.listTaskGroups,
@@ -152,10 +172,7 @@ function buildDownloadsPanel(
     }
   });
 
-  const taskList = element("div", "task-list");
-  renderTaskList(taskList, state);
-  panel.append(title, form, taskList);
-  return panel;
+  await Promise.all(workers);
 }
 
 async function runTaskWithProgressPolling(

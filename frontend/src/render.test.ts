@@ -211,16 +211,16 @@ describe("renderApp", () => {
     expect(root.textContent).toContain("重试 1/3");
     expect(root.textContent).toContain("02 - 命令桥接");
     expect(root.textContent).toContain("02 - 命令桥接.mp4");
-    expect(runTask).toHaveBeenCalledWith({ task_id: "task-1" });
+    await vi.waitFor(() => {
+      expect(runTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(runTask).toHaveBeenCalledWith({ task_id: "task-2" });
+    });
 
     runResolvers.get("task-1")!({
       ...createdCollection.tasks[0],
       state: "completed",
       bytes_downloaded: 100,
       bytes_total: 100,
-    });
-    await vi.waitFor(() => {
-      expect(runTask).toHaveBeenCalledWith({ task_id: "task-2" });
     });
     runResolvers.get("task-2")!({
       ...createdCollection.tasks[1],
