@@ -29,6 +29,7 @@ export interface RenderDependencies {
   getToolStatus?: typeof defaultGetToolStatus;
   listTaskGroups?: typeof defaultListTaskGroups;
   progressPollMs?: number;
+  qrPollMs?: number;
 }
 
 export function renderApp(
@@ -45,6 +46,7 @@ export function renderApp(
   const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
   const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
   const progressPollMs = dependencies.progressPollMs ?? 1000;
+  const qrPollMs = dependencies.qrPollMs ?? 2000;
   root.replaceChildren(
     buildAppShell(root, state, {
       createTask,
@@ -56,6 +58,7 @@ export function renderApp(
       getToolStatus,
       listTaskGroups,
       progressPollMs,
+      qrPollMs,
     }),
   );
 }
@@ -339,7 +342,9 @@ function buildBilibiliLoginDetail(
         status: "pending",
         message: "请用 bilibili 扫码后检查状态",
         error: null,
+        pollTimerId: state.bilibiliLogin.pollTimerId,
       };
+      startBilibiliAutoPoll(root, state, dependencies);
     } catch (error) {
       state.bilibiliLogin = {
         ...state.bilibiliLogin,
@@ -366,6 +371,9 @@ function buildBilibiliLoginDetail(
       if (result.status === "confirmed") {
         setPlatformStatus(state, "bilibili", "已登录");
       }
+      if (isTerminalLoginPollStatus(result.status)) {
+        stopBilibiliAutoPoll(state);
+      }
     } catch (error) {
       state.bilibiliLogin = {
         ...state.bilibiliLogin,
@@ -378,12 +386,14 @@ function buildBilibiliLoginDetail(
   clear.addEventListener("click", async () => {
     try {
       await dependencies.clearBilibiliLogin();
+      stopBilibiliAutoPoll(state);
       state.bilibiliLogin = {
         qrcodeKey: null,
         url: null,
         status: null,
         message: null,
         error: null,
+        pollTimerId: null,
       };
       setPlatformStatus(state, "bilibili", "未登录");
     } catch (error) {
@@ -409,6 +419,58 @@ function setPlatformStatus(state: AppState, platform: string, status: string): v
     row.status = status;
   } else {
     state.platforms.push({ platform, status });
+  }
+}
+
+function startBilibiliAutoPoll(
+  root: HTMLElement,
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): void {
+  stopBilibiliAutoPoll(state);
+  const timerId = window.setInterval(async () => {
+    if (!state.bilibiliLogin.qrcodeKey) {
+      stopBilibiliAutoPoll(state);
+      return;
+    }
+    try {
+      const result = await dependencies.pollBilibiliLogin({
+        qrcode_key: state.bilibiliLogin.qrcodeKey,
+      });
+      state.bilibiliLogin = {
+        ...state.bilibiliLogin,
+        status: result.status,
+        message: result.message,
+        error: null,
+      };
+      if (result.status === "confirmed") {
+        setPlatformStatus(state, "bilibili", "已登录");
+      }
+      if (isTerminalLoginPollStatus(result.status)) {
+        stopBilibiliAutoPoll(state);
+      }
+      renderApp(root, state, dependencies);
+    } catch (error) {
+      state.bilibiliLogin = {
+        ...state.bilibiliLogin,
+        error: errorMessage(error),
+      };
+      renderApp(root, state, dependencies);
+    }
+  }, dependencies.qrPollMs);
+  state.bilibiliLogin = {
+    ...state.bilibiliLogin,
+    pollTimerId: timerId,
+  };
+}
+
+function stopBilibiliAutoPoll(state: AppState): void {
+  if (state.bilibiliLogin.pollTimerId !== null) {
+    window.clearInterval(state.bilibiliLogin.pollTimerId);
+    state.bilibiliLogin = {
+      ...state.bilibiliLogin,
+      pollTimerId: null,
+    };
   }
 }
 
@@ -545,6 +607,10 @@ function loginStatusText(status: string | null, message: string | null): string 
     return message || "等待扫码";
   }
   return "可生成 bilibili 登录二维码链接";
+}
+
+function isTerminalLoginPollStatus(status: string): boolean {
+  return status === "confirmed" || status === "expired";
 }
 
 function errorMessage(error: unknown): string {

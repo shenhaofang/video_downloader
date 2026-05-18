@@ -57,6 +57,7 @@ export interface BilibiliLoginState {
   status: string | null;
   message: string | null;
   error: string | null;
+  pollTimerId: number | null;
 }
 
 export interface ToolStatus {
@@ -95,6 +96,7 @@ export function createInitialState(): AppState {
       status: null,
       message: null,
       error: null,
+      pollTimerId: null,
     },
     toolStatus: {
       ytdlp: "missing",

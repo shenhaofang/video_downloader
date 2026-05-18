@@ -128,6 +128,31 @@ describe("renderApp", () => {
     });
   });
 
+  test("automatically polls bilibili QR login after starting", async () => {
+    const startBilibiliLogin = vi.fn().mockResolvedValue({
+      qrcode_key: "qr-key-1",
+      url: "https://passport.bilibili.com/qrcode/qr-key-1",
+    });
+    const pollBilibiliLogin = vi.fn().mockResolvedValue({
+      status: "confirmed",
+      message: "登录成功",
+    });
+    renderApp(root, createInitialState(), {
+      startBilibiliLogin,
+      pollBilibiliLogin,
+      qrPollMs: 20,
+    });
+    root.querySelector<HTMLButtonElement>("[data-tab='login']")?.click();
+    root.querySelector<HTMLButtonElement>(".platform-summary")?.click();
+
+    root.querySelector<HTMLButtonElement>("[data-testid='start-bilibili-login']")?.click();
+
+    await vi.waitFor(() => {
+      expect(pollBilibiliLogin).toHaveBeenCalledWith({ qrcode_key: "qr-key-1" });
+      expect(root.querySelector("[data-testid='platform-status']")?.textContent).toBe("已登录");
+    });
+  });
+
   test("renders created collection children with output, progress, and retries", async () => {
     const createdCollection = createdCollectionFixture();
     const createTask = vi.fn().mockResolvedValue(createdCollection);
