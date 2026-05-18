@@ -1,16 +1,23 @@
-import { createTask as defaultCreateTask, runTask as defaultRunTask } from "./api";
+import {
+  createTask as defaultCreateTask,
+  runTask as defaultRunTask,
+  saveConfig as defaultSaveConfig,
+} from "./api";
 import {
   platformRowText,
   taskOutputDirectory,
+  type AppSettings,
   type AppState,
   type CreatedTaskGroup,
   type DownloadTask,
+  type Engine,
   type TabId,
 } from "./state";
 
 export interface RenderDependencies {
   createTask?: typeof defaultCreateTask;
   runTask?: typeof defaultRunTask;
+  saveConfig?: typeof defaultSaveConfig;
 }
 
 export function renderApp(
@@ -20,13 +27,14 @@ export function renderApp(
 ): void {
   const createTask = dependencies.createTask ?? defaultCreateTask;
   const runTask = dependencies.runTask ?? defaultRunTask;
-  root.replaceChildren(buildAppShell(state, createTask, runTask));
+  const saveConfig = dependencies.saveConfig ?? defaultSaveConfig;
+  root.replaceChildren(buildAppShell(root, state, { createTask, runTask, saveConfig }));
 }
 
 function buildAppShell(
+  root: HTMLElement,
   state: AppState,
-  createTask: typeof defaultCreateTask,
-  runTask: typeof defaultRunTask,
+  dependencies: Required<RenderDependencies>,
 ): HTMLElement {
   const app = element("main", "app-shell");
   const sidebar = element("aside", "sidebar");
@@ -34,9 +42,9 @@ function buildAppShell(
   const nav = element("nav", "nav");
 
   const panels = element("section", "workspace");
-  const downloads = buildDownloadsPanel(state, createTask, runTask);
+  const downloads = buildDownloadsPanel(state, dependencies.createTask, dependencies.runTask);
   const login = buildLoginPanel(state);
-  const settings = buildSettingsPanel(state);
+  const settings = buildSettingsPanel(root, state, dependencies);
   panels.append(downloads, login, settings);
 
   const tabs: Array<[TabId, string]> = [
@@ -216,15 +224,19 @@ function buildLoginPanel(state: AppState): HTMLElement {
   return panel;
 }
 
-function buildSettingsPanel(state: AppState): HTMLElement {
+function buildSettingsPanel(
+  root: HTMLElement,
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
   const panel = element("section", "panel");
   panel.dataset.panel = "settings";
   panel.hidden = state.activeTab !== "settings";
   panel.append(element("div", "panel-heading", "设置"));
 
-  const settings = element("div", "settings-grid");
-  const root = field("默认根目录", "download-root", "D:\\Videos");
-  root.querySelector("input")!.value = state.settings.downloadRoot;
+  const settings = element("form", "settings-grid");
+  const rootField = field("默认根目录", "download-root", "D:\\Videos");
+  rootField.querySelector("input")!.value = state.settings.downloadRoot;
 
   const concurrency = field("并发数", "concurrency", "2");
   const concurrencyInput = concurrency.querySelector("input")!;
@@ -233,20 +245,60 @@ function buildSettingsPanel(state: AppState): HTMLElement {
   concurrencyInput.max = "8";
   concurrencyInput.value = String(state.settings.concurrency);
 
+  const ytdlp = field("yt-dlp 路径", "ytdlp-path", "C:\\tools\\yt-dlp.exe");
+  ytdlp.querySelector("input")!.value = state.settings.ytdlpPath ?? "";
+  const ffmpeg = field("ffmpeg 路径", "ffmpeg-path", "C:\\tools\\ffmpeg.exe");
+  ffmpeg.querySelector("input")!.value = state.settings.ffmpegPath ?? "";
+  const ffprobe = field("ffprobe 路径", "ffprobe-path", "C:\\tools\\ffprobe.exe");
+  ffprobe.querySelector("input")!.value = state.settings.ffprobePath ?? "";
+
   const engine = element("div", "field");
   engine.dataset.testid = "default-engine";
   engine.append(element("span", "", "默认内核"));
   const segmented = element("div", "segmented");
+  let selectedEngine: Engine = state.settings.defaultEngine;
   for (const value of ["native", "yt-dlp"] as const) {
     const button = element("button", "", value);
     button.type = "button";
+    button.dataset.testid = `engine-${value}`;
     button.setAttribute("aria-pressed", String(value === state.settings.defaultEngine));
+    button.addEventListener("click", () => {
+      selectedEngine = value;
+      segmented.querySelectorAll("button").forEach((item) => {
+        item.setAttribute("aria-pressed", String(item === button));
+      });
+    });
     segmented.append(button);
   }
   engine.append(segmented);
-  settings.append(root, concurrency, engine);
+
+  const save = element("button", "primary", "保存");
+  save.type = "submit";
+  save.dataset.testid = "save-settings";
+  settings.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const saved = await dependencies.saveConfig({
+      downloadRoot: readInput(settings, "download-root") || state.settings.downloadRoot,
+      concurrency: Number(readInput(settings, "concurrency") || state.settings.concurrency),
+      defaultEngine: selectedEngine,
+      ytdlpPath: nullablePath(readInput(settings, "ytdlp-path")),
+      ffmpegPath: nullablePath(readInput(settings, "ffmpeg-path")),
+      ffprobePath: nullablePath(readInput(settings, "ffprobe-path")),
+    });
+    state.settings = saved;
+    renderApp(root, state, dependencies);
+  });
+  settings.append(rootField, concurrency, engine, ytdlp, ffmpeg, ffprobe, save);
   panel.append(settings);
   return panel;
+}
+
+function readInput(root: HTMLElement, testId: string): string {
+  return root.querySelector<HTMLInputElement>(`[data-testid='${testId}']`)?.value.trim() ?? "";
+}
+
+function nullablePath(value: string): string | null {
+  return value ? value : null;
 }
 
 function progressText(task: DownloadTask): string {

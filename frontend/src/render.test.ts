@@ -152,4 +152,41 @@ describe("renderApp", () => {
     expect(downloadPanel?.querySelector("[data-testid='default-engine']")).toBeNull();
     expect(downloadPanel?.textContent).not.toContain("默认内核");
   });
+
+  test("saves settings and updates download output directory", async () => {
+    const saveConfig = vi.fn().mockImplementation((settings) =>
+      Promise.resolve({
+        ...settings,
+        concurrency: 4,
+      }),
+    );
+    const state = createInitialState();
+    renderApp(root, state, { saveConfig });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLInputElement>("[data-testid='download-root']")!.value = "E:\\Videos";
+    root.querySelector<HTMLInputElement>("[data-testid='concurrency']")!.value = "4";
+    root.querySelector<HTMLInputElement>("[data-testid='ffmpeg-path']")!.value =
+      "C:\\tools\\ffmpeg.exe";
+    root.querySelector<HTMLInputElement>("[data-testid='ffprobe-path']")!.value =
+      "C:\\tools\\ffprobe.exe";
+    root.querySelector<HTMLButtonElement>("[data-testid='engine-yt-dlp']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='save-settings']")!.click();
+
+    await vi.waitFor(() => {
+      expect(saveConfig).toHaveBeenCalledWith({
+        downloadRoot: "E:\\Videos",
+        concurrency: 4,
+        defaultEngine: "yt-dlp",
+        ytdlpPath: null,
+        ffmpegPath: "C:\\tools\\ffmpeg.exe",
+        ffprobePath: "C:\\tools\\ffprobe.exe",
+      });
+    });
+    expect(state.settings.downloadRoot).toBe("E:\\Videos");
+    root.querySelector<HTMLButtonElement>("[data-tab='downloads']")?.click();
+    expect(root.querySelector<HTMLInputElement>("[data-testid='output-directory']")?.value).toBe(
+      "E:\\Videos\\bilibili",
+    );
+  });
 });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createTask, getConfig, runTask } from "./api";
+import { createTask, getConfig, runTask, saveConfig } from "./api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -20,6 +20,9 @@ describe("api fallback detection", () => {
       downloadRoot: "D:\\Videos",
       concurrency: 2,
       defaultEngine: "native",
+      ytdlpPath: null,
+      ffmpegPath: null,
+      ffprobePath: null,
     });
     expect(invokeMock).toHaveBeenCalledWith("get_config");
   });
@@ -60,5 +63,45 @@ describe("api fallback detection", () => {
       engine: "yt-dlp",
     });
     expect(invokeMock).toHaveBeenCalledWith("run_task", { input: { task_id: "task-1" } });
+  });
+
+  test("saves config through Tauri command using snake case payload", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      download_root: "E:\\Videos",
+      concurrency: 4,
+      default_engine: "yt_dlp",
+      ytdlp_path: "C:\\tools\\yt-dlp.exe",
+      ffmpeg_path: "C:\\tools\\ffmpeg.exe",
+      ffprobe_path: "C:\\tools\\ffprobe.exe",
+    });
+
+    await expect(
+      saveConfig({
+        downloadRoot: "E:\\Videos",
+        concurrency: 4,
+        defaultEngine: "yt-dlp",
+        ytdlpPath: "C:\\tools\\yt-dlp.exe",
+        ffmpegPath: "C:\\tools\\ffmpeg.exe",
+        ffprobePath: "C:\\tools\\ffprobe.exe",
+      }),
+    ).resolves.toEqual({
+      downloadRoot: "E:\\Videos",
+      concurrency: 4,
+      defaultEngine: "yt-dlp",
+      ytdlpPath: "C:\\tools\\yt-dlp.exe",
+      ffmpegPath: "C:\\tools\\ffmpeg.exe",
+      ffprobePath: "C:\\tools\\ffprobe.exe",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("save_config", {
+      input: {
+        download_root: "E:\\Videos",
+        concurrency: 4,
+        default_engine: "yt_dlp",
+        ytdlp_path: "C:\\tools\\yt-dlp.exe",
+        ffmpeg_path: "C:\\tools\\ffmpeg.exe",
+        ffprobe_path: "C:\\tools\\ffprobe.exe",
+      },
+    });
   });
 });

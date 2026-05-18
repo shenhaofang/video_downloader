@@ -15,6 +15,9 @@ export interface AppSettings {
   downloadRoot: string;
   concurrency: number;
   defaultEngine: Engine;
+  ytdlpPath: string | null;
+  ffmpegPath: string | null;
+  ffprobePath: string | null;
 }
 
 export interface PlatformLoginRow {
@@ -63,6 +66,9 @@ export function createInitialState(): AppState {
       downloadRoot: "D:\\Videos",
       concurrency: 2,
       defaultEngine: "native",
+      ytdlpPath: null,
+      ffmpegPath: null,
+      ffprobePath: null,
     },
     platforms: [{ platform: "bilibili", status: "未登录" }],
     expandedPlatforms: new Set<string>(),

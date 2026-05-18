@@ -47,6 +47,14 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> AppResult<AppConfi
 }
 
 #[tauri::command]
+pub async fn save_config(
+    state: tauri::State<'_, AppState>,
+    input: AppConfig,
+) -> AppResult<AppConfig> {
+    save_config_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
 pub async fn create_task(
     state: tauri::State<'_, AppState>,
     input: CreateTaskCommand,
@@ -92,6 +100,12 @@ pub async fn get_tool_status(state: tauri::State<'_, AppState>) -> AppResult<Too
 
 async fn get_config_from_state(state: &AppState) -> AppResult<AppConfig> {
     state.storage.load_config().await
+}
+
+async fn save_config_from_state(state: &AppState, input: AppConfig) -> AppResult<AppConfig> {
+    let config = crate::config::with_normalized_concurrency(input);
+    state.storage.save_config(&config).await?;
+    Ok(config)
 }
 
 async fn create_task_from_state(
@@ -480,6 +494,27 @@ mod tests {
         let loaded = get_config_from_state(&state).await.unwrap();
 
         assert_eq!(loaded, config);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn save_config_from_state_persists_normalized_settings() {
+        let state = command_test_state().await;
+        let config = AppConfig {
+            download_root: "E:\\Downloads".into(),
+            concurrency: 99,
+            default_engine: DownloadEngine::YtDlp,
+            ytdlp_path: Some("C:\\tools\\yt-dlp.exe".into()),
+            ffmpeg_path: Some("C:\\tools\\ffmpeg.exe".into()),
+            ffprobe_path: Some("C:\\tools\\ffprobe.exe".into()),
+        };
+
+        let saved = save_config_from_state(&state, config).await.unwrap();
+
+        assert_eq!(saved.download_root, "E:\\Downloads");
+        assert_eq!(saved.concurrency, 8);
+        assert_eq!(saved.default_engine, DownloadEngine::YtDlp);
+        assert_eq!(state.storage.load_config().await.unwrap(), saved);
         cleanup_state(state).await;
     }
 

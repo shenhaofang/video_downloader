@@ -11,6 +11,9 @@ interface TauriConfig {
   download_root: string;
   concurrency: number;
   default_engine: string;
+  ytdlp_path?: string | null;
+  ffmpeg_path?: string | null;
+  ffprobe_path?: string | null;
 }
 
 interface CreateTaskInput {
@@ -26,14 +29,22 @@ interface RunTaskInput {
 export async function getConfig(): Promise<AppSettings> {
   try {
     const config = await invoke<TauriConfig>("get_config");
-    return {
-      downloadRoot: config.download_root,
-      concurrency: config.concurrency,
-      defaultEngine: normalizeEngine(config.default_engine),
-    };
+    return normalizeConfig(config);
   } catch (error) {
     if (isTauriUnavailable(error)) {
       return fallbackConfig();
+    }
+    throw error;
+  }
+}
+
+export async function saveConfig(input: AppSettings): Promise<AppSettings> {
+  try {
+    const result = await invoke<TauriConfig>("save_config", { input: configToTauri(input) });
+    return normalizeConfig(result);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return input;
     }
     throw error;
   }
@@ -93,6 +104,9 @@ function fallbackConfig(): AppSettings {
     downloadRoot: "D:\\Videos",
     concurrency: 2,
     defaultEngine: "native",
+    ytdlpPath: null,
+    ffmpegPath: null,
+    ffprobePath: null,
   };
 }
 
@@ -166,4 +180,31 @@ function normalizeTask(task: CreatedTaskGroup["tasks"][number]) {
     ...task,
     engine: normalizeEngine(task.engine),
   };
+}
+
+function normalizeConfig(config: TauriConfig): AppSettings {
+  return {
+    downloadRoot: config.download_root,
+    concurrency: config.concurrency,
+    defaultEngine: normalizeEngine(config.default_engine),
+    ytdlpPath: config.ytdlp_path ?? null,
+    ffmpegPath: config.ffmpeg_path ?? null,
+    ffprobePath: config.ffprobe_path ?? null,
+  };
+}
+
+function configToTauri(settings: AppSettings): TauriConfig {
+  return {
+    download_root: settings.downloadRoot,
+    concurrency: settings.concurrency,
+    default_engine: settings.defaultEngine === "yt-dlp" ? "yt_dlp" : "native",
+    ytdlp_path: emptyToNull(settings.ytdlpPath),
+    ffmpeg_path: emptyToNull(settings.ffmpegPath),
+    ffprobe_path: emptyToNull(settings.ffprobePath),
+  };
+}
+
+function emptyToNull(value: string | null): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed : null;
 }

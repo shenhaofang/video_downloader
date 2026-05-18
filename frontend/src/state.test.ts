@@ -8,6 +8,8 @@ describe("state defaults", () => {
     expect(state.activeTab).toBe("downloads");
     expect(state.settings.defaultEngine).toBe("native");
     expect(state.settings.concurrency).toBe(2);
+    expect(state.settings.ffmpegPath).toBeNull();
+    expect(state.settings.ffprobePath).toBeNull();
   });
 
   test("prefills task output directory from the default root", () => {
