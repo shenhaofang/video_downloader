@@ -1,5 +1,5 @@
-use crate::auth::bilibili::{BilibiliAuth, LoginQr};
-use crate::auth::session_store::SessionStore;
+use crate::app_state::AppState;
+use crate::auth::bilibili::LoginQr;
 use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
@@ -28,8 +28,8 @@ pub struct ToolStatus {
 }
 
 #[tauri::command]
-pub fn get_config() -> AppResult<AppConfig> {
-    Ok(AppConfig::default())
+pub async fn get_config(state: tauri::State<'_, AppState>) -> AppResult<AppConfig> {
+    get_config_from_state(state.inner()).await
 }
 
 #[tauri::command]
@@ -47,30 +47,47 @@ pub async fn create_task(input: CreateTaskCommand) -> AppResult<CreatedTaskGroup
 }
 
 #[tauri::command]
-pub fn list_platform_logins() -> AppResult<Vec<PlatformLoginRow>> {
+pub fn list_platform_logins(state: tauri::State<'_, AppState>) -> AppResult<Vec<PlatformLoginRow>> {
+    list_platform_logins_from_state(state.inner())
+}
+
+#[tauri::command]
+pub async fn start_bilibili_login(state: tauri::State<'_, AppState>) -> AppResult<LoginQr> {
+    start_bilibili_login_from_state(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn clear_bilibili_login(state: tauri::State<'_, AppState>) -> AppResult<()> {
+    clear_bilibili_login_from_state(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn get_tool_status(state: tauri::State<'_, AppState>) -> AppResult<ToolStatus> {
+    get_tool_status_from_state(state.inner()).await
+}
+
+async fn get_config_from_state(state: &AppState) -> AppResult<AppConfig> {
+    state.storage.load_config().await
+}
+
+fn list_platform_logins_from_state(state: &AppState) -> AppResult<Vec<PlatformLoginRow>> {
+    let status = state.bilibili_auth.status()?;
     Ok(vec![PlatformLoginRow {
-        platform: "bilibili".into(),
-        status: "未登录".into(),
+        platform: status.platform,
+        status: status.status,
     }])
 }
 
-#[tauri::command]
-pub async fn start_bilibili_login() -> AppResult<LoginQr> {
-    let auth = BilibiliAuth::new(SessionStore::new(std::env::temp_dir().join(format!(
-        "video-downloader-login-shell-{}",
-        uuid::Uuid::new_v4()
-    ))));
-    Ok(auth.create_mock_qr())
+async fn start_bilibili_login_from_state(state: &AppState) -> AppResult<LoginQr> {
+    Ok(state.bilibili_auth.create_mock_qr())
 }
 
-#[tauri::command]
-pub async fn clear_bilibili_login() -> AppResult<()> {
-    Ok(())
+async fn clear_bilibili_login_from_state(state: &AppState) -> AppResult<()> {
+    state.bilibili_auth.clear()
 }
 
-#[tauri::command]
-pub async fn get_tool_status() -> AppResult<ToolStatus> {
-    Ok(tool_status_from_config(&get_config()?))
+async fn get_tool_status_from_state(state: &AppState) -> AppResult<ToolStatus> {
+    Ok(tool_status_from_config(&state.storage.load_config().await?))
 }
 
 fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
@@ -89,6 +106,8 @@ fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::bilibili::BilibiliAuth;
+    use crate::auth::session_store::SessionStore;
     use crate::models::DownloadEngine;
     use std::fs;
 
@@ -110,9 +129,10 @@ mod tests {
         assert_eq!(first_file_name, "01 - 安装 Tauri.mp4");
     }
 
-    #[test]
-    fn exposes_flat_platform_login_rows() {
-        let rows = list_platform_logins().unwrap();
+    #[tokio::test]
+    async fn exposes_flat_platform_login_rows() {
+        let state = command_test_state().await;
+        let rows = list_platform_logins_from_state(&state).unwrap();
 
         assert_eq!(
             rows,
@@ -121,14 +141,17 @@ mod tests {
                 status: "未登录".into(),
             }]
         );
+        cleanup_state(state).await;
     }
 
     #[tokio::test]
     async fn start_bilibili_login_returns_mock_qr() {
-        let qr = start_bilibili_login().await.unwrap();
+        let state = command_test_state().await;
+        let qr = start_bilibili_login_from_state(&state).await.unwrap();
 
         assert_eq!(qr.qrcode_key, "mock-qrcode-key");
         assert!(qr.url.starts_with("https://passport.bilibili.com/"));
+        cleanup_state(state).await;
     }
 
     #[tokio::test]
@@ -142,23 +165,45 @@ mod tests {
             .unwrap();
         assert_eq!(auth.status().unwrap().status, "已登录");
 
-        clear_bilibili_login().await.unwrap();
+        let state = command_test_state().await;
+        clear_bilibili_login_from_state(&state).await.unwrap();
 
         assert_eq!(auth.status().unwrap().status, "已登录");
+        cleanup_state(state).await;
         fs::remove_dir_all(dir).unwrap();
     }
 
-    #[test]
-    fn get_config_returns_native_default() {
-        let config = get_config().unwrap();
+    #[tokio::test]
+    async fn get_config_returns_native_default() {
+        let state = command_test_state().await;
+        let config = get_config_from_state(&state).await.unwrap();
 
         assert_eq!(config.default_engine, DownloadEngine::Native);
         assert_eq!(config.concurrency, 2);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn get_config_reads_persisted_config_from_app_state() {
+        let state = command_test_state().await;
+        let config = AppConfig {
+            download_root: "E:\\Videos".into(),
+            concurrency: 5,
+            default_engine: DownloadEngine::YtDlp,
+            ytdlp_path: Some("C:\\tools\\yt-dlp.exe".into()),
+        };
+        state.storage.save_config(&config).await.unwrap();
+
+        let loaded = get_config_from_state(&state).await.unwrap();
+
+        assert_eq!(loaded, config);
+        cleanup_state(state).await;
     }
 
     #[tokio::test]
     async fn get_tool_status_reports_default_missing_tools() {
-        let status = get_tool_status().await.unwrap();
+        let state = command_test_state().await;
+        let status = get_tool_status_from_state(&state).await.unwrap();
 
         assert_eq!(
             status,
@@ -168,6 +213,75 @@ mod tests {
                 ffprobe: "missing".into(),
             }
         );
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn get_tool_status_reads_persisted_ytdlp_path_from_app_state() {
+        let state = command_test_state().await;
+        let tool_dir =
+            std::env::temp_dir().join(format!("vd-tool-status-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tool_dir).unwrap();
+        let binary = tool_dir.join("yt-dlp.exe");
+        fs::write(&binary, b"test binary").unwrap();
+        let config = AppConfig {
+            ytdlp_path: Some(binary.to_string_lossy().to_string()),
+            ..AppConfig::default()
+        };
+        state.storage.save_config(&config).await.unwrap();
+
+        let status = get_tool_status_from_state(&state).await.unwrap();
+
+        assert_eq!(status.ytdlp, "available");
+        assert_eq!(status.ffmpeg, "missing");
+        assert_eq!(status.ffprobe, "missing");
+        cleanup_state(state).await;
+        fs::remove_dir_all(tool_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_platform_logins_reads_bilibili_auth_status_from_app_state() {
+        let state = command_test_state().await;
+        state
+            .bilibili_auth
+            .save_cookie_string("SESSDATA=auth-cookie".into())
+            .unwrap();
+
+        let rows = list_platform_logins_from_state(&state).unwrap();
+
+        assert_eq!(
+            rows,
+            vec![PlatformLoginRow {
+                platform: "bilibili".into(),
+                status: "已登录".into(),
+            }]
+        );
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn clear_bilibili_login_clears_managed_session() {
+        let state = command_test_state().await;
+        state
+            .bilibili_auth
+            .save_cookie_string("SESSDATA=auth-cookie".into())
+            .unwrap();
+
+        clear_bilibili_login_from_state(&state).await.unwrap();
+
+        assert_eq!(state.bilibili_auth.status().unwrap().status, "未登录");
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn start_bilibili_login_uses_managed_auth_for_mock_qr() {
+        let state = command_test_state().await;
+
+        let qr = start_bilibili_login_from_state(&state).await.unwrap();
+
+        assert_eq!(qr.qrcode_key, "mock-qrcode-key");
+        assert!(qr.url.starts_with("https://passport.bilibili.com/"));
+        cleanup_state(state).await;
     }
 
     #[test]
@@ -187,5 +301,32 @@ mod tests {
         assert_eq!(status.ffmpeg, "missing");
         assert_eq!(status.ffprobe, "missing");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    async fn command_test_state() -> crate::app_state::AppState {
+        crate::app_state::AppState::new(command_test_dir())
+            .await
+            .unwrap()
+    }
+
+    fn command_test_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("vd-command-state-{}", uuid::Uuid::new_v4()))
+    }
+
+    async fn cleanup_state(state: crate::app_state::AppState) {
+        let dir = state.data_dir().to_path_buf();
+        state.close().await;
+        remove_dir_all_retry(&dir);
+    }
+
+    fn remove_dir_all_retry(path: &std::path::Path) {
+        for _ in 0..500 {
+            match fs::remove_dir_all(path) {
+                Ok(()) => return,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+        panic!("failed to remove test app state dir {}", path.display());
     }
 }

@@ -489,7 +489,6 @@ pub mod models;
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .run(tauri::generate_context!())
         .expect("failed to run video downloader");
 }
@@ -2464,7 +2463,7 @@ git commit -m "feat: add bilibili login command shell"
 - Create: `src-tauri/src/app_state.rs`
 - Test: `src-tauri/src/app_state.rs`
 
-- [ ] **Step 1: Add app state initializer**
+- [x] **Step 1: Add app state initializer**
 
 Create `src-tauri/src/app_state.rs`:
 
@@ -2493,7 +2492,7 @@ impl AppState {
 }
 ```
 
-- [ ] **Step 2: Register managed state**
+- [x] **Step 2: Register managed state**
 
 Modify `src-tauri/src/lib.rs` to create state in setup:
 
@@ -2511,14 +2510,13 @@ pub mod task;
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            use tauri::Manager;
+
             let handle = app.handle().clone();
-            tauri::async_runtime::block_on(async move {
-                let dir = handle.path().app_data_dir().expect("failed to resolve app data dir");
-                let state = app_state::AppState::new(dir).await.expect("failed to initialize app state");
-                handle.manage(state);
-            });
+            let dir = handle.path().app_data_dir()?;
+            let state = init_app_state(dir)?;
+            handle.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2532,9 +2530,13 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("failed to run video downloader");
 }
+
+fn init_app_state(data_dir: std::path::PathBuf) -> Result<app_state::AppState, Box<dyn std::error::Error>> {
+    Ok(tauri::async_runtime::block_on(app_state::AppState::new(data_dir))?)
+}
 ```
 
-- [ ] **Step 3: Refactor commands to use state**
+- [x] **Step 3: Refactor commands to use state**
 
 Modify command signatures:
 
@@ -2551,7 +2553,7 @@ pub async fn list_platform_logins(state: tauri::State<'_, crate::app_state::AppS
 }
 ```
 
-- [ ] **Step 4: Run Rust tests and check**
+- [x] **Step 4: Run Rust tests and check**
 
 ```powershell
 cd src-tauri
@@ -2561,7 +2563,17 @@ cargo check
 
 Expected: all Rust tests pass and app type-checks.
 
-- [ ] **Step 5: Commit app state**
+Task 13 review notes:
+- RED: `cargo test app_state` failed because `AppState` was not yet defined.
+- RED: `cargo test commands::tests` failed because the state-based command helpers did not exist.
+- RED: setup failure-path test failed until app-state initialization became a helper that returns setup errors instead of panicking with `expect`.
+- RED: app-state cleanup test failed until `Storage::close` and `AppState::close` explicitly closed the SQLite pool before deleting test data directories.
+- RED: full `cargo test` exposed Windows SQLite file-lock cleanup failures under parallel tests until the local SQLite pool was constrained to one connection.
+- GREEN: `cargo test app_state` passed after `AppState::new(data_dir)` created the data directory, opened `video_downloader.sqlite`, and wired encrypted Bilibili sessions under `data_dir/sessions`.
+- GREEN: `cargo test commands::tests` passed after config, login status, tool status, login start, and login clear read from managed `AppState`.
+- Scope note: `tauri_plugin_shell` remains intentionally absent; shell and sidecar work belongs to Task 14.
+
+- [x] **Step 5: Commit app state**
 
 ```powershell
 git add src-tauri/src

@@ -13,7 +13,7 @@ pub struct Storage {
 impl Storage {
     pub async fn open(database_url: &str) -> AppResult<Self> {
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect(database_url)
             .await
             .map_err(storage_error)?;
@@ -131,6 +131,10 @@ impl Storage {
             .map_err(storage_error)?;
 
         Ok(())
+    }
+
+    pub async fn close(self) {
+        self.pool.close().await;
     }
 }
 
@@ -319,8 +323,7 @@ mod tests {
 
         async fn close(self) {
             let path = self.path;
-            self.storage.pool.close().await;
-            drop(self.storage);
+            self.storage.close().await;
             remove_files(&path);
         }
     }
