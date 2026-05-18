@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createTask, getConfig, runTask, saveConfig } from "./api";
+import { createTask, getConfig, listTaskGroups, runTask, saveConfig } from "./api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -103,5 +103,42 @@ describe("api fallback detection", () => {
         ffprobe_path: "C:\\tools\\ffprobe.exe",
       },
     });
+  });
+
+  test("loads persisted task groups and normalizes task engines", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue([
+      {
+        group: {
+          id: "group-1",
+          title: "Rust 桌面应用入门",
+          output_dir: "D:\\Videos\\bilibili",
+          state: "completed",
+        },
+        tasks: [
+          {
+            id: "task-1",
+            title: "安装 Tauri",
+            output_file: "D:\\Videos\\out.mp4",
+            state: "completed",
+            bytes_downloaded: 9,
+            bytes_total: 9,
+            retry_count: 0,
+            max_retries: 3,
+            quality: "720P",
+            used_login: false,
+            engine: "yt_dlp",
+          },
+        ],
+      },
+    ]);
+
+    await expect(listTaskGroups()).resolves.toEqual([
+      expect.objectContaining({
+        group: expect.objectContaining({ id: "group-1" }),
+        tasks: [expect.objectContaining({ id: "task-1", engine: "yt-dlp" })],
+      }),
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith("list_task_groups");
   });
 });

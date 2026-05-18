@@ -139,6 +139,17 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn load_task_groups(&self) -> AppResult<Vec<TaskGroup>> {
+        let rows = sqlx::query(
+            "SELECT id, source_url, platform, title, output_dir, engine, state, created_at FROM task_groups ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+
+        rows.into_iter().map(group_from_row).collect()
+    }
+
     pub async fn insert_task(&self, task: &DownloadTask) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO download_tasks (id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message, bvid, cid, page) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -326,6 +337,23 @@ fn task_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<DownloadTask> {
         bvid: row.get("bvid"),
         cid,
         page,
+    })
+}
+
+fn group_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<TaskGroup> {
+    let created_at = chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?
+        .with_timezone(&Utc);
+
+    Ok(TaskGroup {
+        id: parse_uuid(&row.get::<String, _>("id"))?,
+        source_url: row.get("source_url"),
+        platform: row.get("platform"),
+        title: row.get("title"),
+        output_dir: row.get("output_dir"),
+        engine: parse_engine(&row.get::<String, _>("engine")),
+        state: parse_state(&row.get::<String, _>("state")),
+        created_at,
     })
 }
 
@@ -522,6 +550,39 @@ mod tests {
         let loaded = storage.load_task(task.id).await.unwrap();
 
         assert_eq!(loaded, task);
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn loads_task_groups_newest_first() {
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
+        let older = TaskGroup {
+            id: Uuid::new_v4(),
+            source_url: String::from("https://www.bilibili.com/video/BV1older0000"),
+            platform: String::from("bilibili"),
+            title: String::from("Older"),
+            output_dir: String::from("D:\\Videos"),
+            engine: DownloadEngine::Native,
+            state: TaskState::Queued,
+            created_at: Utc::now() - chrono::Duration::minutes(5),
+        };
+        let newer = TaskGroup {
+            id: Uuid::new_v4(),
+            source_url: String::from("https://www.bilibili.com/video/BV1newer0000"),
+            platform: String::from("bilibili"),
+            title: String::from("Newer"),
+            output_dir: String::from("D:\\Videos"),
+            engine: DownloadEngine::Native,
+            state: TaskState::Completed,
+            created_at: Utc::now(),
+        };
+        storage.insert_group(&older).await.unwrap();
+        storage.insert_group(&newer).await.unwrap();
+
+        let groups = storage.load_task_groups().await.unwrap();
+
+        assert_eq!(groups, vec![newer, older]);
         db.close().await;
     }
 

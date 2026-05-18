@@ -25,7 +25,7 @@
 ## Persistence
 
 - [x] Config persists through SQLite storage.
-- [ ] Task history persists after app restart.
+- [x] Task history persists after app restart.
 - [x] Encrypted bilibili session file persists through the session store.
 - [x] Clearing bilibili login removes the managed session file.
 
@@ -51,7 +51,6 @@
 
 - The real frontend still does not expose QR-code login controls. The backend commands exist, but the expanded bilibili login detail is still placeholder text.
 - Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and reported by command, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, live progress streaming, and background concurrency scheduling.
-- `create_task` uses real native bilibili probe by default and persists created records; the frontend now triggers `run_task` for created child tasks, but it still does not poll/reload persisted task history or stream in-flight progress.
-- Created task records are queryable from storage, but the frontend does not reload persisted task history on startup yet.
+- `create_task` uses real native bilibili probe by default and persists created records; the frontend now triggers `run_task` for created child tasks and reloads persisted history on startup, but it still does not stream in-flight progress.
 - Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.
 - Bundled `ffmpeg` / `ffprobe` binaries, `externalBin` entries, and license profile are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build.

@@ -1,5 +1,5 @@
 import "./styles.css";
-import { getConfig, listPlatformLogins } from "./api";
+import { getConfig, listPlatformLogins, listTaskGroups } from "./api";
 import { renderApp } from "./render";
 import { createInitialState } from "./state";
 
@@ -11,10 +11,11 @@ if (!root) {
 const state = createInitialState();
 renderApp(root, state);
 
-Promise.all([getConfig(), listPlatformLogins()])
-  .then(([settings, platforms]) => {
+Promise.all([getConfig(), listPlatformLogins(), listTaskGroups()])
+  .then(([settings, platforms, taskGroups]) => {
     state.settings = settings;
     state.platforms = platforms;
+    state.taskGroups = taskGroups;
     renderApp(root, state);
   })
   .catch((error) => {

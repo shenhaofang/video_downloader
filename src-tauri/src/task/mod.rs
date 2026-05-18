@@ -19,7 +19,7 @@ pub struct CreateTaskRequest {
     pub has_login: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CreatedTaskGroup {
     pub group: TaskGroup,
     pub tasks: Vec<DownloadTask>,

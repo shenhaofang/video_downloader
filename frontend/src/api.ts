@@ -62,6 +62,18 @@ export async function createTask(input: CreateTaskInput): Promise<CreatedTaskGro
   }
 }
 
+export async function listTaskGroups(): Promise<CreatedTaskGroup[]> {
+  try {
+    const result = await invoke<CreatedTaskGroup[]>("list_task_groups");
+    return result.map(normalizeCreatedTaskGroup);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
 export async function runTask(input: RunTaskInput) {
   try {
     const result = await invoke<CreatedTaskGroup["tasks"][number]>("run_task", { input });

@@ -63,6 +63,13 @@ pub async fn create_task(
 }
 
 #[tauri::command]
+pub async fn list_task_groups(
+    state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<CreatedTaskGroup>> {
+    list_task_groups_from_state(state.inner()).await
+}
+
+#[tauri::command]
 pub async fn run_task(
     state: tauri::State<'_, AppState>,
     input: RunTaskCommand,
@@ -149,6 +156,17 @@ async fn create_task_with_downloader_from_state(
     }
 
     Ok(result)
+}
+
+async fn list_task_groups_from_state(state: &AppState) -> AppResult<Vec<CreatedTaskGroup>> {
+    let groups = state.storage.load_task_groups().await?;
+    let mut results = Vec::with_capacity(groups.len());
+    for group in groups {
+        let tasks = state.storage.load_tasks_for_group(group.id).await?;
+        results.push(CreatedTaskGroup { group, tasks });
+    }
+
+    Ok(results)
 }
 
 async fn run_task_from_state(
@@ -431,6 +449,28 @@ mod tests {
         let persisted = state.storage.load_task(task.id).await.unwrap();
         assert_eq!(persisted.state, crate::models::TaskState::Failed);
         assert_eq!(persisted.error_code.as_deref(), Some("ffmpeg_error"));
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn list_task_groups_from_state_returns_persisted_groups_with_tasks() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+
+        let groups = list_task_groups_from_state(&state).await.unwrap();
+
+        assert_eq!(groups, vec![created]);
         cleanup_state(state).await;
     }
 

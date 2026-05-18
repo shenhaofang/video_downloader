@@ -27,6 +27,7 @@ pub fn run() {
             commands::get_config,
             commands::save_config,
             commands::create_task,
+            commands::list_task_groups,
             commands::run_task,
             commands::list_platform_logins,
             commands::start_bilibili_login,
