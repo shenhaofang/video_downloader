@@ -26,6 +26,20 @@ interface RunTaskInput {
   task_id: string;
 }
 
+export interface LoginQr {
+  qrcode_key: string;
+  url: string;
+}
+
+export interface PollLoginInput {
+  qrcode_key: string;
+}
+
+export interface LoginPollResult {
+  status: string;
+  message: string;
+}
+
 export async function getConfig(): Promise<AppSettings> {
   try {
     const config = await invoke<TauriConfig>("get_config");
@@ -81,6 +95,42 @@ export async function runTask(input: RunTaskInput) {
   } catch (error) {
     if (isTauriUnavailable(error)) {
       return fallbackRunTask(input.task_id);
+    }
+    throw error;
+  }
+}
+
+export async function startBilibiliLogin(): Promise<LoginQr> {
+  try {
+    return await invoke<LoginQr>("start_bilibili_login");
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return {
+        qrcode_key: "fallback-qrcode-key",
+        url: "https://passport.bilibili.com/qrcode/fallback",
+      };
+    }
+    throw error;
+  }
+}
+
+export async function pollBilibiliLogin(input: PollLoginInput): Promise<LoginPollResult> {
+  try {
+    return await invoke<LoginPollResult>("poll_bilibili_login", { input });
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return { status: "pending", message: "等待扫码" };
+    }
+    throw error;
+  }
+}
+
+export async function clearBilibiliLogin(): Promise<void> {
+  try {
+    await invoke("clear_bilibili_login");
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return;
     }
     throw error;
   }

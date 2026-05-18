@@ -91,6 +91,41 @@ describe("renderApp", () => {
     expect(detail?.textContent).toContain("本地加密文件");
   });
 
+  test("starts, polls, and clears bilibili QR login from expanded platform detail", async () => {
+    const startBilibiliLogin = vi.fn().mockResolvedValue({
+      qrcode_key: "qr-key-1",
+      url: "https://passport.bilibili.com/qrcode/qr-key-1",
+    });
+    const pollBilibiliLogin = vi.fn().mockResolvedValue({
+      status: "confirmed",
+      message: "登录成功",
+    });
+    const clearBilibiliLogin = vi.fn().mockResolvedValue(undefined);
+    const state = createInitialState();
+    renderApp(root, state, { startBilibiliLogin, pollBilibiliLogin, clearBilibiliLogin });
+    root.querySelector<HTMLButtonElement>("[data-tab='login']")?.click();
+    root.querySelector<HTMLButtonElement>(".platform-summary")?.click();
+
+    root.querySelector<HTMLButtonElement>("[data-testid='start-bilibili-login']")?.click();
+
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("https://passport.bilibili.com/qrcode/qr-key-1");
+    });
+    expect(startBilibiliLogin).toHaveBeenCalledOnce();
+
+    root.querySelector<HTMLButtonElement>("[data-testid='poll-bilibili-login']")?.click();
+    await vi.waitFor(() => {
+      expect(pollBilibiliLogin).toHaveBeenCalledWith({ qrcode_key: "qr-key-1" });
+      expect(root.querySelector("[data-testid='platform-status']")?.textContent).toBe("已登录");
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='clear-bilibili-login']")?.click();
+    await vi.waitFor(() => {
+      expect(clearBilibiliLogin).toHaveBeenCalledOnce();
+      expect(root.querySelector("[data-testid='platform-status']")?.textContent).toBe("未登录");
+    });
+  });
+
   test("renders created collection children with output, progress, and retries", async () => {
     const createTask = vi.fn().mockResolvedValue(createdCollection);
     const runResolvers = new Map<string, (task: CreatedTaskGroup["tasks"][number]) => void>();

@@ -1,7 +1,10 @@
 import {
+  clearBilibiliLogin as defaultClearBilibiliLogin,
   createTask as defaultCreateTask,
+  pollBilibiliLogin as defaultPollBilibiliLogin,
   runTask as defaultRunTask,
   saveConfig as defaultSaveConfig,
+  startBilibiliLogin as defaultStartBilibiliLogin,
 } from "./api";
 import {
   platformRowText,
@@ -18,6 +21,9 @@ export interface RenderDependencies {
   createTask?: typeof defaultCreateTask;
   runTask?: typeof defaultRunTask;
   saveConfig?: typeof defaultSaveConfig;
+  startBilibiliLogin?: typeof defaultStartBilibiliLogin;
+  pollBilibiliLogin?: typeof defaultPollBilibiliLogin;
+  clearBilibiliLogin?: typeof defaultClearBilibiliLogin;
 }
 
 export function renderApp(
@@ -28,7 +34,19 @@ export function renderApp(
   const createTask = dependencies.createTask ?? defaultCreateTask;
   const runTask = dependencies.runTask ?? defaultRunTask;
   const saveConfig = dependencies.saveConfig ?? defaultSaveConfig;
-  root.replaceChildren(buildAppShell(root, state, { createTask, runTask, saveConfig }));
+  const startBilibiliLogin = dependencies.startBilibiliLogin ?? defaultStartBilibiliLogin;
+  const pollBilibiliLogin = dependencies.pollBilibiliLogin ?? defaultPollBilibiliLogin;
+  const clearBilibiliLogin = dependencies.clearBilibiliLogin ?? defaultClearBilibiliLogin;
+  root.replaceChildren(
+    buildAppShell(root, state, {
+      createTask,
+      runTask,
+      saveConfig,
+      startBilibiliLogin,
+      pollBilibiliLogin,
+      clearBilibiliLogin,
+    }),
+  );
 }
 
 function buildAppShell(
@@ -43,7 +61,7 @@ function buildAppShell(
 
   const panels = element("section", "workspace");
   const downloads = buildDownloadsPanel(state, dependencies.createTask, dependencies.runTask);
-  const login = buildLoginPanel(state);
+  const login = buildLoginPanel(root, state, dependencies);
   const settings = buildSettingsPanel(root, state, dependencies);
   panels.append(downloads, login, settings);
 
@@ -184,7 +202,11 @@ function buildChildTask(task: DownloadTask): HTMLElement {
   return row;
 }
 
-function buildLoginPanel(state: AppState): HTMLElement {
+function buildLoginPanel(
+  root: HTMLElement,
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
   const panel = element("section", "panel");
   panel.dataset.panel = "login";
   panel.hidden = state.activeTab !== "login";
@@ -202,11 +224,10 @@ function buildLoginPanel(state: AppState): HTMLElement {
     shortStatus.dataset.testid = "platform-status";
     summary.append(name, shortStatus);
 
-    const detail = element(
-      "div",
-      "platform-detail",
-      "后续任务会在这里接入扫码或 Cookie 登录，凭据将保存为本地加密文件。",
-    );
+    const detail =
+      row.platform === "bilibili"
+        ? buildBilibiliLoginDetail(root, state, dependencies)
+        : element("div", "platform-detail", "凭据将保存为本地加密文件。");
     detail.hidden = !state.expandedPlatforms.has(row.platform);
     summary.addEventListener("click", () => {
       if (state.expandedPlatforms.has(row.platform)) {
@@ -222,6 +243,115 @@ function buildLoginPanel(state: AppState): HTMLElement {
   }
   panel.append(list);
   return panel;
+}
+
+function buildBilibiliLoginDetail(
+  root: HTMLElement,
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
+  const detail = element("div", "platform-detail");
+  const copy = element("div", "login-copy", "保存方式：本地加密文件");
+  const actions = element("div", "login-actions");
+  const start = element("button", "secondary", "生成二维码链接");
+  start.type = "button";
+  start.dataset.testid = "start-bilibili-login";
+  const poll = element("button", "secondary", "检查扫码状态");
+  poll.type = "button";
+  poll.dataset.testid = "poll-bilibili-login";
+  poll.disabled = !state.bilibiliLogin.qrcodeKey;
+  const clear = element("button", "secondary", "清除登录");
+  clear.type = "button";
+  clear.dataset.testid = "clear-bilibili-login";
+  actions.append(start, poll, clear);
+
+  const qr = state.bilibiliLogin.url ? element("div", "qr-url", state.bilibiliLogin.url) : null;
+  const messageText = loginStatusText(state.bilibiliLogin.status, state.bilibiliLogin.message);
+  const message = element("div", "login-message", messageText);
+  if (state.bilibiliLogin.error) {
+    message.append(element("span", "login-error", state.bilibiliLogin.error));
+  }
+
+  start.addEventListener("click", async () => {
+    try {
+      const result = await dependencies.startBilibiliLogin();
+      state.bilibiliLogin = {
+        qrcodeKey: result.qrcode_key,
+        url: result.url,
+        status: "pending",
+        message: "请用 bilibili 扫码后检查状态",
+        error: null,
+      };
+    } catch (error) {
+      state.bilibiliLogin = {
+        ...state.bilibiliLogin,
+        error: errorMessage(error),
+      };
+    }
+    renderApp(root, state, dependencies);
+  });
+
+  poll.addEventListener("click", async () => {
+    if (!state.bilibiliLogin.qrcodeKey) {
+      return;
+    }
+    try {
+      const result = await dependencies.pollBilibiliLogin({
+        qrcode_key: state.bilibiliLogin.qrcodeKey,
+      });
+      state.bilibiliLogin = {
+        ...state.bilibiliLogin,
+        status: result.status,
+        message: result.message,
+        error: null,
+      };
+      if (result.status === "confirmed") {
+        setPlatformStatus(state, "bilibili", "已登录");
+      }
+    } catch (error) {
+      state.bilibiliLogin = {
+        ...state.bilibiliLogin,
+        error: errorMessage(error),
+      };
+    }
+    renderApp(root, state, dependencies);
+  });
+
+  clear.addEventListener("click", async () => {
+    try {
+      await dependencies.clearBilibiliLogin();
+      state.bilibiliLogin = {
+        qrcodeKey: null,
+        url: null,
+        status: null,
+        message: null,
+        error: null,
+      };
+      setPlatformStatus(state, "bilibili", "未登录");
+    } catch (error) {
+      state.bilibiliLogin = {
+        ...state.bilibiliLogin,
+        error: errorMessage(error),
+      };
+    }
+    renderApp(root, state, dependencies);
+  });
+
+  detail.append(copy, actions);
+  if (qr) {
+    detail.append(qr);
+  }
+  detail.append(message);
+  return detail;
+}
+
+function setPlatformStatus(state: AppState, platform: string, status: string): void {
+  const row = state.platforms.find((item) => item.platform === platform);
+  if (row) {
+    row.status = status;
+  } else {
+    state.platforms.push({ platform, status });
+  }
 }
 
 function buildSettingsPanel(
@@ -317,10 +447,31 @@ function stateLabel(state: string): string {
   const labels: Record<string, string> = {
     queued: "排队中",
     downloading: "下载中",
+    merging: "合并中",
     completed: "已完成",
     failed: "失败",
   };
   return labels[state] ?? state;
+}
+
+function loginStatusText(status: string | null, message: string | null): string {
+  if (status === "confirmed") {
+    return "已登录，Cookie 已加密保存";
+  }
+  if (status === "scanned") {
+    return message || "已扫码，请在手机上确认";
+  }
+  if (status === "expired") {
+    return message || "二维码已过期";
+  }
+  if (status === "pending") {
+    return message || "等待扫码";
+  }
+  return "可生成 bilibili 登录二维码链接";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(

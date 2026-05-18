@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createTask, getConfig, listTaskGroups, runTask, saveConfig } from "./api";
+import {
+  clearBilibiliLogin,
+  createTask,
+  getConfig,
+  listTaskGroups,
+  pollBilibiliLogin,
+  runTask,
+  saveConfig,
+  startBilibiliLogin,
+} from "./api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -140,5 +149,39 @@ describe("api fallback detection", () => {
       }),
     ]);
     expect(invokeMock).toHaveBeenCalledWith("list_task_groups");
+  });
+
+  test("starts and polls bilibili QR login through Tauri commands", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock
+      .mockResolvedValueOnce({
+        qrcode_key: "qr-key-1",
+        url: "https://passport.bilibili.com/qrcode/qr-key-1",
+      })
+      .mockResolvedValueOnce({
+        status: "confirmed",
+        message: "登录成功",
+      });
+
+    await expect(startBilibiliLogin()).resolves.toEqual({
+      qrcode_key: "qr-key-1",
+      url: "https://passport.bilibili.com/qrcode/qr-key-1",
+    });
+    await expect(pollBilibiliLogin({ qrcode_key: "qr-key-1" })).resolves.toEqual({
+      status: "confirmed",
+      message: "登录成功",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "start_bilibili_login");
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "poll_bilibili_login", {
+      input: { qrcode_key: "qr-key-1" },
+    });
+  });
+
+  test("clears bilibili login through Tauri command", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue(undefined);
+
+    await expect(clearBilibiliLogin()).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith("clear_bilibili_login");
   });
 });

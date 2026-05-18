@@ -20,7 +20,7 @@
 - [x] Login tab shows a flat platform list.
 - [x] Clicking bilibili expands login details.
 - [x] Collection task details show child video name, output file, progress, and retry count.
-- [ ] QR-code login controls are available in expanded bilibili details.
+- [x] QR-code login controls are available in expanded bilibili details.
 
 ## Persistence
 
@@ -49,7 +49,7 @@
 
 ## Known Gaps
 
-- The real frontend still does not expose QR-code login controls. The backend commands exist, but the expanded bilibili login detail is still placeholder text.
+- The real frontend exposes manual QR-code login controls in the expanded bilibili login detail; automatic polling and rendered QR images are still deferred.
 - Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and reported by command, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, live progress streaming, and background concurrency scheduling.
 - `create_task` uses real native bilibili probe by default and persists created records; the frontend now triggers `run_task` for created child tasks and reloads persisted history on startup, but it still does not stream in-flight progress.
 - Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.

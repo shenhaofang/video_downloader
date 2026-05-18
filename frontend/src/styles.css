@@ -236,6 +236,35 @@ button {
   font-size: 13px;
 }
 
+.login-copy,
+.login-message,
+.qr-url {
+  line-height: 1.5;
+}
+
+.login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.login-actions .secondary {
+  padding: 7px 10px;
+}
+
+.qr-url {
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+  color: #1f2937;
+}
+
+.login-error {
+  display: block;
+  margin-top: 4px;
+  color: #b91c1c;
+}
+
 .settings-grid {
   grid-template-columns: minmax(220px, 1fr) 120px minmax(220px, 1fr);
 }

@@ -51,12 +51,21 @@ export interface CreatedTaskGroup {
   tasks: DownloadTask[];
 }
 
+export interface BilibiliLoginState {
+  qrcodeKey: string | null;
+  url: string | null;
+  status: string | null;
+  message: string | null;
+  error: string | null;
+}
+
 export interface AppState {
   activeTab: TabId;
   settings: AppSettings;
   platforms: PlatformLoginRow[];
   expandedPlatforms: Set<string>;
   taskGroups: CreatedTaskGroup[];
+  bilibiliLogin: BilibiliLoginState;
 }
 
 export function createInitialState(): AppState {
@@ -73,6 +82,13 @@ export function createInitialState(): AppState {
     platforms: [{ platform: "bilibili", status: "未登录" }],
     expandedPlatforms: new Set<string>(),
     taskGroups: [],
+    bilibiliLogin: {
+      qrcodeKey: null,
+      url: null,
+      status: null,
+      message: null,
+      error: null,
+    },
   };
 }
 
