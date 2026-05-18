@@ -23,12 +23,14 @@ export interface PlatformLoginRow {
 }
 
 export interface TaskGroup {
+  id: string;
   title: string;
   output_dir: string;
   state: TaskState;
 }
 
 export interface DownloadTask {
+  id: string;
   title: string;
   output_file: string;
   state: TaskState;

@@ -1,4 +1,4 @@
-import { createTask as defaultCreateTask } from "./api";
+import { createTask as defaultCreateTask, runTask as defaultRunTask } from "./api";
 import {
   platformRowText,
   taskOutputDirectory,
@@ -10,6 +10,7 @@ import {
 
 export interface RenderDependencies {
   createTask?: typeof defaultCreateTask;
+  runTask?: typeof defaultRunTask;
 }
 
 export function renderApp(
@@ -18,12 +19,14 @@ export function renderApp(
   dependencies: RenderDependencies = {},
 ): void {
   const createTask = dependencies.createTask ?? defaultCreateTask;
-  root.replaceChildren(buildAppShell(state, createTask));
+  const runTask = dependencies.runTask ?? defaultRunTask;
+  root.replaceChildren(buildAppShell(state, createTask, runTask));
 }
 
 function buildAppShell(
   state: AppState,
   createTask: typeof defaultCreateTask,
+  runTask: typeof defaultRunTask,
 ): HTMLElement {
   const app = element("main", "app-shell");
   const sidebar = element("aside", "sidebar");
@@ -31,7 +34,7 @@ function buildAppShell(
   const nav = element("nav", "nav");
 
   const panels = element("section", "workspace");
-  const downloads = buildDownloadsPanel(state, createTask);
+  const downloads = buildDownloadsPanel(state, createTask, runTask);
   const login = buildLoginPanel(state);
   const settings = buildSettingsPanel(state);
   panels.append(downloads, login, settings);
@@ -67,6 +70,7 @@ function buildAppShell(
 function buildDownloadsPanel(
   state: AppState,
   createTask: typeof defaultCreateTask,
+  runTask: typeof defaultRunTask,
 ): HTMLElement {
   const panel = element("section", "panel");
   panel.dataset.panel = "downloads";
@@ -94,12 +98,30 @@ function buildDownloadsPanel(
     const created = await createTask({ url, output_dir: outputDir, has_login: false });
     state.taskGroups.unshift(created);
     taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
+    for (const task of created.tasks) {
+      const updated = await runTask({ task_id: task.id });
+      replaceTask(state, updated);
+      taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
+    }
   });
 
   const taskList = element("div", "task-list");
   taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
   panel.append(title, form, taskList);
   return panel;
+}
+
+function replaceTask(state: AppState, updated: DownloadTask): void {
+  for (const group of state.taskGroups) {
+    const index = group.tasks.findIndex((task) => task.id === updated.id);
+    if (index >= 0) {
+      group.tasks[index] = updated;
+      group.group.state = group.tasks.every((task) => task.state === "completed")
+        ? "completed"
+        : group.group.state;
+      return;
+    }
+  }
 }
 
 function field(labelText: string, testId: string, placeholder: string): HTMLElement {

@@ -5,12 +5,14 @@ import { createInitialState, type CreatedTaskGroup } from "./state";
 
 const createdCollection: CreatedTaskGroup = {
   group: {
+    id: "group-1",
     title: "Rust 桌面应用入门",
     output_dir: "D:\\Videos\\bilibili",
     state: "queued",
   },
   tasks: [
     {
+      id: "task-1",
       title: "01 - 安装 Tauri",
       output_file: "D:\\Videos\\bilibili\\Rust 桌面应用入门\\01 - 安装 Tauri.mp4",
       state: "queued",
@@ -23,6 +25,7 @@ const createdCollection: CreatedTaskGroup = {
       engine: "native",
     },
     {
+      id: "task-2",
       title: "02 - 命令桥接",
       output_file: "D:\\Videos\\bilibili\\Rust 桌面应用入门\\02 - 命令桥接.mp4",
       state: "downloading",
@@ -90,7 +93,14 @@ describe("renderApp", () => {
 
   test("renders created collection children with output, progress, and retries", async () => {
     const createTask = vi.fn().mockResolvedValue(createdCollection);
-    renderApp(root, createInitialState(), { createTask });
+    const runResolvers = new Map<string, (task: CreatedTaskGroup["tasks"][number]) => void>();
+    const runTask = vi.fn().mockImplementation(
+      ({ task_id }: { task_id: string }) =>
+        new Promise((resolve) => {
+          runResolvers.set(task_id, resolve);
+        }),
+    );
+    renderApp(root, createInitialState(), { createTask, runTask });
 
     root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
       "https://www.bilibili.com/video/BV1xx411c7mD";
@@ -106,6 +116,26 @@ describe("renderApp", () => {
     expect(root.textContent).toContain("重试 1/3");
     expect(root.textContent).toContain("02 - 命令桥接");
     expect(root.textContent).toContain("02 - 命令桥接.mp4");
+    expect(runTask).toHaveBeenCalledWith({ task_id: "task-1" });
+
+    runResolvers.get("task-1")!({
+      ...createdCollection.tasks[0],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    await vi.waitFor(() => {
+      expect(runTask).toHaveBeenCalledWith({ task_id: "task-2" });
+    });
+    runResolvers.get("task-2")!({
+      ...createdCollection.tasks[1],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("已完成");
+    });
     expect(createTask).toHaveBeenCalledWith({
       url: "https://www.bilibili.com/video/BV1xx411c7mD",
       output_dir: "D:\\Videos\\bilibili",

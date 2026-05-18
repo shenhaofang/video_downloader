@@ -19,6 +19,10 @@ interface CreateTaskInput {
   has_login: boolean;
 }
 
+interface RunTaskInput {
+  task_id: string;
+}
+
 export async function getConfig(): Promise<AppSettings> {
   try {
     const config = await invoke<TauriConfig>("get_config");
@@ -42,6 +46,18 @@ export async function createTask(input: CreateTaskInput): Promise<CreatedTaskGro
   } catch (error) {
     if (isTauriUnavailable(error)) {
       return fallbackTaskGroup(input.output_dir);
+    }
+    throw error;
+  }
+}
+
+export async function runTask(input: RunTaskInput) {
+  try {
+    const result = await invoke<CreatedTaskGroup["tasks"][number]>("run_task", { input });
+    return normalizeTask(result);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return fallbackRunTask(input.task_id);
     }
     throw error;
   }
@@ -87,20 +103,37 @@ function fallbackPlatforms(): PlatformLoginRow[] {
 function fallbackTaskGroup(outputDir: string): CreatedTaskGroup {
   return {
     group: {
+      id: "fallback-group-1",
       title: "Rust 桌面应用入门",
       output_dir: outputDir,
       state: "queued",
     },
     tasks: [
-      fallbackTask("01 - 安装 Tauri", `${outputDir}\\Rust 桌面应用入门\\01 - 安装 Tauri.mp4`, 0),
-      fallbackTask("02 - 命令桥接", `${outputDir}\\Rust 桌面应用入门\\02 - 命令桥接.mp4`, 0),
-      fallbackTask("03 - 打包发布", `${outputDir}\\Rust 桌面应用入门\\03 - 打包发布.mp4`, 0),
+      fallbackTask(
+        "fallback-task-1",
+        "01 - 安装 Tauri",
+        `${outputDir}\\Rust 桌面应用入门\\01 - 安装 Tauri.mp4`,
+        0,
+      ),
+      fallbackTask(
+        "fallback-task-2",
+        "02 - 命令桥接",
+        `${outputDir}\\Rust 桌面应用入门\\02 - 命令桥接.mp4`,
+        0,
+      ),
+      fallbackTask(
+        "fallback-task-3",
+        "03 - 打包发布",
+        `${outputDir}\\Rust 桌面应用入门\\03 - 打包发布.mp4`,
+        0,
+      ),
     ],
   };
 }
 
-function fallbackTask(title: string, outputFile: string, progress: number) {
+function fallbackTask(id: string, title: string, outputFile: string, progress: number) {
   return {
+    id,
     title,
     output_file: outputFile,
     state: "queued" as const,
@@ -114,12 +147,23 @@ function fallbackTask(title: string, outputFile: string, progress: number) {
   };
 }
 
+function fallbackRunTask(taskId: string) {
+  return {
+    ...fallbackTask(taskId, "本地预览任务", `D:\\Videos\\bilibili\\${taskId}.mp4`, 100),
+    state: "completed" as const,
+  };
+}
+
 function normalizeCreatedTaskGroup(result: CreatedTaskGroup): CreatedTaskGroup {
   return {
     group: result.group,
-    tasks: result.tasks.map((task) => ({
-      ...task,
-      engine: normalizeEngine(task.engine),
-    })),
+    tasks: result.tasks.map(normalizeTask),
+  };
+}
+
+function normalizeTask(task: CreatedTaskGroup["tasks"][number]) {
+  return {
+    ...task,
+    engine: normalizeEngine(task.engine),
   };
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createTask, getConfig } from "./api";
+import { createTask, getConfig, runTask } from "./api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -36,5 +36,29 @@ describe("api fallback detection", () => {
         has_login: false,
       }),
     ).rejects.toBe(error);
+  });
+
+  test("runs task through Tauri command and normalizes engine", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      id: "task-1",
+      title: "安装 Tauri",
+      output_file: "D:\\Videos\\out.mp4",
+      state: "completed",
+      bytes_downloaded: 9,
+      bytes_total: 9,
+      retry_count: 0,
+      max_retries: 3,
+      quality: "720P",
+      used_login: false,
+      engine: "yt_dlp",
+    });
+
+    await expect(runTask({ task_id: "task-1" })).resolves.toMatchObject({
+      id: "task-1",
+      state: "completed",
+      engine: "yt-dlp",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("run_task", { input: { task_id: "task-1" } });
   });
 });
