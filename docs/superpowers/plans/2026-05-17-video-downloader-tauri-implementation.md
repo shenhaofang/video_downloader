@@ -3157,7 +3157,7 @@ Task 18 review notes:
 - Create: `docs/verification/first-release-checklist.md`
 - Modify: `docs/superpowers/specs/2026-05-17-video-downloader-tauri-design.md` only if verification reveals spec drift.
 
-- [ ] **Step 1: Create manual verification checklist**
+- [x] **Step 1: Create manual verification checklist**
 
 Create `docs/verification/first-release-checklist.md`:
 
@@ -3199,7 +3199,7 @@ Create `docs/verification/first-release-checklist.md`:
 - [ ] FFmpeg license profile is recorded before public distribution.
 ```
 
-- [ ] **Step 2: Run automated verification**
+- [x] **Step 2: Run automated verification**
 
 Run:
 
@@ -3213,7 +3213,7 @@ cargo check
 
 Expected: every command exits with code 0.
 
-- [ ] **Step 3: Run prototype parity check in browser**
+- [x] **Step 3: Run prototype parity check in browser**
 
 Open:
 
@@ -3229,12 +3229,17 @@ docs/superpowers/prototypes/video-downloader-ui/index.html
 
 Expected: reviewed UI behavior remains present in the real frontend.
 
-- [ ] **Step 4: Commit verification docs**
+- [x] **Step 4: Commit verification docs**
 
 ```powershell
 git add docs/verification/first-release-checklist.md
 git commit -m "docs: add first release verification checklist"
 ```
+
+Task 19 review notes:
+- Automated verification passed: `npm run test`, `npm run build`, `cargo test`, `cargo check`, `cargo clippy -- -D warnings`.
+- Browser verification at `http://127.0.0.1:5173/` passed for navigation, no horizontal overflow at the current narrow viewport, task output directory input, collection child task details, settings-only engine selector, and flat expandable login platform list.
+- Verification found remaining product gaps: no QR controls in the frontend login detail, command-layer task creation still uses the mock downloader, native media download is not wired end to end, startup session verification is missing, and bundled ffmpeg distribution is not configured.
 
 ## Self-Review Results
 
