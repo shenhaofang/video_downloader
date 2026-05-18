@@ -2189,12 +2189,19 @@ git commit -m "feat: add native bilibili parser"
 
 ## Task 11: Add `yt-dlp` Fallback Adapter And Tool Status
 
+Execution plan for this pass:
+- [x] RED: add `yt_dlp` adapter tests and `commands::tests` coverage, then run `cargo test yt_dlp commands::tests` to confirm the missing API failure.
+- [x] GREEN: implement only the path detector, argument builder, tool status command, and Tauri handler registration required by the tests.
+- [x] VERIFY: run the requested Rust test/check/fmt/clippy/diff commands and record the result before committing.
+
 **Files:**
 - Create: `src-tauri/src/platform/bilibili/yt_dlp.rs`
+- Modify: `src-tauri/src/platform/bilibili/mod.rs`
 - Modify: `src-tauri/src/commands.rs`
+- Modify: `src-tauri/src/lib.rs`
 - Test: `src-tauri/src/platform/bilibili/yt_dlp.rs`
 
-- [ ] **Step 1: Add path-based status helper**
+- [x] **Step 1: Add path-based status helper**
 
 Create `src-tauri/src/platform/bilibili/yt_dlp.rs`:
 
@@ -2211,7 +2218,7 @@ pub enum YtDlpStatus {
 pub fn detect_ytdlp(configured_path: Option<&str>) -> YtDlpStatus {
     if let Some(path) = configured_path {
         let path = PathBuf::from(path);
-        if path.exists() {
+        if path.is_file() {
             return YtDlpStatus::Available { path };
         }
     }
@@ -2251,10 +2258,18 @@ mod tests {
         assert!(args.contains(&"--cookies".to_string()));
         assert!(args.contains(&"cookies.txt".to_string()));
     }
+
+    #[test]
+    fn missing_when_configured_path_is_directory() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(detect_ytdlp(Some(&dir.to_string_lossy())), YtDlpStatus::Missing);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 ```
 
-- [ ] **Step 2: Expose tool status command**
+- [x] **Step 2: Expose tool status command**
 
 Modify `src-tauri/src/commands.rs` and add:
 
@@ -2268,31 +2283,49 @@ pub struct ToolStatus {
 
 #[tauri::command]
 pub async fn get_tool_status() -> AppResult<ToolStatus> {
-    Ok(ToolStatus {
-        ytdlp: "missing".into(),
-        ffmpeg: "bundled".into(),
-        ffprobe: "bundled".into(),
-    })
+    Ok(tool_status_from_config(&get_config()?))
+}
+
+fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
+    let ytdlp = match detect_ytdlp(config.ytdlp_path.as_deref()) {
+        YtDlpStatus::Available { .. } => "available",
+        YtDlpStatus::Missing => "missing",
+    };
+    ToolStatus {
+        ytdlp: ytdlp.into(),
+        ffmpeg: "missing".into(),
+        ffprobe: "missing".into(),
+    }
 }
 ```
 
 Register `commands::get_tool_status` in `tauri::generate_handler!`.
 
-- [ ] **Step 3: Run fallback tests**
+- [x] **Step 3: Run fallback tests**
 
 ```powershell
 cd src-tauri
-cargo test yt_dlp commands::tests
+cargo test yt_dlp
+cargo test commands::tests
 ```
 
 Expected: `yt-dlp` status and command tests pass.
 
-- [ ] **Step 4: Commit fallback adapter shell**
+- [x] **Step 4: Commit fallback adapter shell**
 
 ```powershell
 git add src-tauri/src/platform/bilibili/yt_dlp.rs src-tauri/src/commands.rs src-tauri/src/lib.rs
 git commit -m "feat: add yt-dlp fallback status"
 ```
+
+**Task 11 Review:**
+- RED: `cargo test yt_dlp commands::tests` was attempted first and failed because Cargo accepts only one test filter. Equivalent RED runs of `cargo test yt_dlp` and `cargo test commands::tests` then failed on missing `YtDlpStatus`, `detect_ytdlp`, `require_ytdlp`, `ytdlp_json_args`, `ToolStatus`, and `get_tool_status`.
+- RED: directory-path hardening test failed while `detect_ytdlp` still used `exists()`, because directories were misreported as available.
+- RED: `commands::tests` failed until tool status was derived from `AppConfig.ytdlp_path` and stopped reporting unbundled media tools as `bundled`.
+- GREEN: `cargo test yt_dlp` passed 7 tests and `cargo test commands::tests` passed 5 tests after the minimal adapter and command implementation.
+- Verification: `cargo test`, `cargo check`, `cargo fmt --check`, `cargo clippy -- -D warnings`, and `git diff --check HEAD` all exited 0.
+- Follow-up for Task 13: when commands are refactored to managed app state, `get_tool_status` must load the persisted config from storage and pass it to `tool_status_from_config`.
+- Follow-up for Task 14: when ffmpeg/ffprobe sidecars are actually wired, `get_tool_status` must stop returning fixed `missing` and report the sidecar detection result.
 
 ## Task 12: Add Bilibili QR Login Command Flow
 

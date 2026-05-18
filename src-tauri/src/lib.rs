@@ -13,7 +13,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::create_task,
-            commands::list_platform_logins
+            commands::list_platform_logins,
+            commands::get_tool_status
         ])
         .run(tauri::generate_context!())
         .expect("failed to run video downloader");

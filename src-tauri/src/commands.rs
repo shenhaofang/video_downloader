@@ -1,5 +1,6 @@
 use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
+use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
 use crate::platform::mock::MockDownloader;
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,13 @@ pub struct CreateTaskCommand {
 pub struct PlatformLoginRow {
     pub platform: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolStatus {
+    pub ytdlp: String,
+    pub ffmpeg: String,
+    pub ffprobe: String,
 }
 
 #[tauri::command]
@@ -44,10 +52,29 @@ pub fn list_platform_logins() -> AppResult<Vec<PlatformLoginRow>> {
     }])
 }
 
+#[tauri::command]
+pub async fn get_tool_status() -> AppResult<ToolStatus> {
+    Ok(tool_status_from_config(&get_config()?))
+}
+
+fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
+    let ytdlp = match detect_ytdlp(config.ytdlp_path.as_deref()) {
+        YtDlpStatus::Available { .. } => "available",
+        YtDlpStatus::Missing => "missing",
+    };
+
+    ToolStatus {
+        ytdlp: ytdlp.into(),
+        ffmpeg: "missing".into(),
+        ffprobe: "missing".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::DownloadEngine;
+    use std::fs;
 
     #[tokio::test]
     async fn create_task_uses_mock_collection() {
@@ -86,5 +113,38 @@ mod tests {
 
         assert_eq!(config.default_engine, DownloadEngine::Native);
         assert_eq!(config.concurrency, 2);
+    }
+
+    #[tokio::test]
+    async fn get_tool_status_reports_default_missing_tools() {
+        let status = get_tool_status().await.unwrap();
+
+        assert_eq!(
+            status,
+            ToolStatus {
+                ytdlp: "missing".into(),
+                ffmpeg: "missing".into(),
+                ffprobe: "missing".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_status_uses_configured_ytdlp_path() {
+        let dir = std::env::temp_dir().join(format!("vd-tool-status-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("yt-dlp.exe");
+        fs::write(&binary, b"test binary").unwrap();
+        let config = AppConfig {
+            ytdlp_path: Some(binary.to_string_lossy().to_string()),
+            ..AppConfig::default()
+        };
+
+        let status = tool_status_from_config(&config);
+
+        assert_eq!(status.ytdlp, "available");
+        assert_eq!(status.ffmpeg, "missing");
+        assert_eq!(status.ffprobe, "missing");
+        fs::remove_dir_all(dir).unwrap();
     }
 }
