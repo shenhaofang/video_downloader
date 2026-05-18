@@ -54,6 +54,7 @@ export interface CreatedTaskGroup {
 export interface BilibiliLoginState {
   qrcodeKey: string | null;
   url: string | null;
+  qrImageDataUrl: string | null;
   status: string | null;
   message: string | null;
   error: string | null;
@@ -93,6 +94,7 @@ export function createInitialState(): AppState {
     bilibiliLogin: {
       qrcodeKey: null,
       url: null,
+      qrImageDataUrl: null,
       status: null,
       message: null,
       error: null,

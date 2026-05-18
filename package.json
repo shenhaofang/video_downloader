@@ -12,13 +12,15 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@tauri-apps/api": "latest"
+    "@tauri-apps/api": "latest",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "latest",
+    "@types/qrcode": "^1.5.6",
+    "jsdom": "latest",
     "typescript": "latest",
     "vite": "latest",
-    "vitest": "latest",
-    "jsdom": "latest"
+    "vitest": "latest"
   }
 }

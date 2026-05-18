@@ -153,6 +153,38 @@ describe("renderApp", () => {
     });
   });
 
+  test("renders a QR image after starting bilibili login", async () => {
+    const startBilibiliLogin = vi.fn().mockResolvedValue({
+      qrcode_key: "qr-key-1",
+      url: "https://passport.bilibili.com/qrcode/qr-key-1",
+    });
+    const pollBilibiliLogin = vi.fn().mockResolvedValue({
+      status: "expired",
+      message: "二维码已失效",
+    });
+    const createQrDataUrl = vi.fn().mockResolvedValue("data:image/svg+xml,%3Csvg%3E%3C/svg%3E");
+    renderApp(root, createInitialState(), {
+      startBilibiliLogin,
+      pollBilibiliLogin,
+      createQrDataUrl,
+      qrPollMs: 20,
+    });
+    root.querySelector<HTMLButtonElement>("[data-tab='login']")?.click();
+    root.querySelector<HTMLButtonElement>(".platform-summary")?.click();
+
+    root.querySelector<HTMLButtonElement>("[data-testid='start-bilibili-login']")?.click();
+
+    await vi.waitFor(() => {
+      const image = root.querySelector<HTMLImageElement>("[data-testid='bilibili-qr-image']");
+      expect(createQrDataUrl).toHaveBeenCalledWith(
+        "https://passport.bilibili.com/qrcode/qr-key-1",
+      );
+      expect(image?.alt).toBe("bilibili 登录二维码");
+      expect(image?.src).toContain("data:image/svg+xml");
+      expect(root.textContent).toContain("https://passport.bilibili.com/qrcode/qr-key-1");
+    });
+  });
+
   test("renders created collection children with output, progress, and retries", async () => {
     const createdCollection = createdCollectionFixture();
     const createTask = vi.fn().mockResolvedValue(createdCollection);

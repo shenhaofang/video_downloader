@@ -18,6 +18,7 @@ import {
   type Engine,
   type TabId,
 } from "./state";
+import { createQrDataUrl as defaultCreateQrDataUrl } from "./qr";
 
 export interface RenderDependencies {
   createTask?: typeof defaultCreateTask;
@@ -30,6 +31,7 @@ export interface RenderDependencies {
   listTaskGroups?: typeof defaultListTaskGroups;
   progressPollMs?: number;
   qrPollMs?: number;
+  createQrDataUrl?: typeof defaultCreateQrDataUrl;
 }
 
 export function renderApp(
@@ -47,6 +49,7 @@ export function renderApp(
   const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
   const progressPollMs = dependencies.progressPollMs ?? 1000;
   const qrPollMs = dependencies.qrPollMs ?? 2000;
+  const createQrDataUrl = dependencies.createQrDataUrl ?? defaultCreateQrDataUrl;
   root.replaceChildren(
     buildAppShell(root, state, {
       createTask,
@@ -59,6 +62,7 @@ export function renderApp(
       listTaskGroups,
       progressPollMs,
       qrPollMs,
+      createQrDataUrl,
     }),
   );
 }
@@ -327,6 +331,9 @@ function buildBilibiliLoginDetail(
   actions.append(start, poll, clear);
 
   const qr = state.bilibiliLogin.url ? element("div", "qr-url", state.bilibiliLogin.url) : null;
+  const qrImage = state.bilibiliLogin.qrImageDataUrl
+    ? buildQrImage(state.bilibiliLogin.qrImageDataUrl)
+    : null;
   const messageText = loginStatusText(state.bilibiliLogin.status, state.bilibiliLogin.message);
   const message = element("div", "login-message", messageText);
   if (state.bilibiliLogin.error) {
@@ -336,9 +343,11 @@ function buildBilibiliLoginDetail(
   start.addEventListener("click", async () => {
     try {
       const result = await dependencies.startBilibiliLogin();
+      const qrImageDataUrl = await dependencies.createQrDataUrl(result.url);
       state.bilibiliLogin = {
         qrcodeKey: result.qrcode_key,
         url: result.url,
+        qrImageDataUrl,
         status: "pending",
         message: "请用 bilibili 扫码后检查状态",
         error: null,
@@ -390,6 +399,7 @@ function buildBilibiliLoginDetail(
       state.bilibiliLogin = {
         qrcodeKey: null,
         url: null,
+        qrImageDataUrl: null,
         status: null,
         message: null,
         error: null,
@@ -406,11 +416,23 @@ function buildBilibiliLoginDetail(
   });
 
   detail.append(copy, actions);
+  if (qrImage) {
+    detail.append(qrImage);
+  }
   if (qr) {
     detail.append(qr);
   }
   detail.append(message);
   return detail;
+}
+
+function buildQrImage(src: string): HTMLImageElement {
+  const image = document.createElement("img");
+  image.className = "qr-image";
+  image.dataset.testid = "bilibili-qr-image";
+  image.alt = "bilibili 登录二维码";
+  image.src = src;
+  return image;
 }
 
 function setPlatformStatus(state: AppState, platform: string, status: string): void {

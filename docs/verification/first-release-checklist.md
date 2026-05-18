@@ -49,7 +49,7 @@
 
 ## Known Gaps
 
-- The real frontend exposes QR-code login controls and automatically polls login status after QR generation; rendered QR images are still deferred.
+- The real frontend exposes QR-code login controls, renders a scannable QR image, and automatically polls login status after QR generation.
 - Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and shown in the UI, and the frontend calls the backend `run_task` command after task creation. The desktop runtime still lacks bundled binaries, event streaming, and background concurrency scheduling.
 - `create_task` uses real native bilibili probe by default and persists created records; the frontend triggers `run_task`, reloads persisted history on startup, and polls persisted task groups while a task is running so visible progress is not stale.
 - Startup login verification now checks stored bilibili cookies during the existing login status load, clears confirmed-invalid cookies, and preserves sessions as `待验证` when the network is unavailable.
