@@ -145,6 +145,14 @@ impl Default for NativeBilibiliDownloader {
 }
 
 impl NativeBilibiliDownloader {
+    pub fn with_ffmpeg_path(ffmpeg_path: Option<PathBuf>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            ffmpeg_path,
+            playurl_url_override: None,
+        }
+    }
+
     #[cfg(test)]
     fn with_media_dependencies(
         client: reqwest::Client,

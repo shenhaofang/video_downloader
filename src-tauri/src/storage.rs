@@ -212,6 +212,21 @@ impl Storage {
         rows.into_iter().map(task_from_row).collect()
     }
 
+    pub async fn load_task(&self, task_id: Uuid) -> AppResult<DownloadTask> {
+        let row = sqlx::query(
+            "SELECT id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message, bvid, cid, page FROM download_tasks WHERE id = ?",
+        )
+        .bind(task_id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            AppError::structured(ErrorCode::FilesystemError, "download task not found")
+        })?;
+
+        task_from_row(row)
+    }
+
     pub async fn append_log(&self, task_id: Uuid, line: &str) -> AppResult<()> {
         sqlx::query("INSERT INTO task_logs (task_id, created_at, line) VALUES (?, ?, ?)")
             .bind(task_id.to_string())
@@ -465,6 +480,48 @@ mod tests {
         let logs = storage.load_logs_for_task(loaded[0].id).await.unwrap();
         assert_eq!(logs, vec!["[task] queued".to_string()]);
 
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn loads_single_task_by_id() {
+        let db = TestDatabase::open().await;
+        let storage = &db.storage;
+        let group = TaskGroup {
+            id: Uuid::new_v4(),
+            source_url: String::from("https://www.bilibili.com/video/BV1xx411c7mD"),
+            platform: String::from("bilibili"),
+            title: String::from("Rust desktop app"),
+            output_dir: String::from("D:\\Videos"),
+            engine: DownloadEngine::Native,
+            state: TaskState::Queued,
+            created_at: Utc::now(),
+        };
+        let task = DownloadTask {
+            id: Uuid::new_v4(),
+            group_id: group.id,
+            title: String::from("Part 1"),
+            output_file: String::from("D:\\Videos\\part-1.mp4"),
+            state: TaskState::Queued,
+            engine: DownloadEngine::Native,
+            quality: Some(String::from("720P")),
+            used_login: false,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            retry_count: 0,
+            max_retries: 3,
+            error_code: None,
+            error_message: None,
+            bvid: Some("BV1xx411c7mD".into()),
+            cid: Some(111),
+            page: Some(1),
+        };
+        storage.insert_group(&group).await.unwrap();
+        storage.insert_task(&task).await.unwrap();
+
+        let loaded = storage.load_task(task.id).await.unwrap();
+
+        assert_eq!(loaded, task);
         db.close().await;
     }
 

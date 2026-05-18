@@ -9,12 +9,18 @@ use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
 use crate::platform::PlatformDownloader;
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskCommand {
     pub url: String,
     pub output_dir: String,
     pub has_login: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunTaskCommand {
+    pub task_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,6 +52,14 @@ pub async fn create_task(
     input: CreateTaskCommand,
 ) -> AppResult<CreatedTaskGroup> {
     create_task_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
+pub async fn run_task(
+    state: tauri::State<'_, AppState>,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    run_task_from_state(state.inner(), input).await
 }
 
 #[tauri::command]
@@ -121,6 +135,49 @@ async fn create_task_with_downloader_from_state(
     }
 
     Ok(result)
+}
+
+async fn run_task_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    let task = load_task_from_command(state, &input).await?;
+    match task.engine {
+        DownloadEngine::Native => {
+            let config = state.storage.load_config().await?;
+            let downloader = NativeBilibiliDownloader::with_ffmpeg_path(
+                config.ffmpeg_path.map(std::path::PathBuf::from),
+            );
+            run_task_with_downloader_from_state(state, input, &downloader).await
+        }
+        DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
+            crate::errors::ErrorCode::EngineMissing,
+            "yt-dlp task execution is not wired yet",
+        )),
+    }
+}
+
+async fn run_task_with_downloader_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+    downloader: &dyn PlatformDownloader,
+) -> AppResult<crate::models::DownloadTask> {
+    let task = load_task_from_command(state, &input).await?;
+    crate::task::executor::run_task_once(&state.storage, task, downloader).await
+}
+
+async fn load_task_from_command(
+    state: &AppState,
+    input: &RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    let task_id = Uuid::parse_str(&input.task_id).map_err(|err| {
+        crate::errors::AppError::structured(
+            crate::errors::ErrorCode::FilesystemError,
+            err.to_string(),
+        )
+    })?;
+
+    state.storage.load_task(task_id).await
 }
 
 fn list_platform_logins_from_state(state: &AppState) -> AppResult<Vec<PlatformLoginRow>> {
@@ -202,6 +259,7 @@ mod tests {
     use std::fs;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn create_task_uses_mock_collection() {
@@ -286,6 +344,79 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code(), crate::errors::ErrorCode::EngineMissing);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn run_task_with_downloader_from_state_loads_persisted_task_and_updates_storage() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+        let downloader = CommandRunDownloader::default();
+
+        let updated = run_task_with_downloader_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+            &downloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.id, task.id);
+        assert_eq!(updated.state, crate::models::TaskState::Completed);
+        assert_eq!(updated.bytes_downloaded, 9);
+        assert_eq!(updated.bytes_total, Some(9));
+        let persisted = state.storage.load_task(task.id).await.unwrap();
+        assert_eq!(persisted, updated);
+        let input = downloader.input().unwrap();
+        assert_eq!(input.output_path, task.output_file);
+        assert_eq!(input.item.metadata.unwrap().bvid, "BV1xx411c7mD");
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn run_task_from_state_persists_missing_ffmpeg_failure_for_native_task() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+
+        let err = run_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), crate::errors::ErrorCode::FfmpegError);
+        let persisted = state.storage.load_task(task.id).await.unwrap();
+        assert_eq!(persisted.state, crate::models::TaskState::Failed);
+        assert_eq!(persisted.error_code.as_deref(), Some("ffmpeg_error"));
         cleanup_state(state).await;
     }
 
@@ -596,6 +727,46 @@ mod tests {
             _sink: &'a dyn EventSink,
         ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
             Box::pin(async { unreachable!("command create tests do not download") })
+        }
+    }
+
+    #[derive(Default)]
+    struct CommandRunDownloader {
+        input: Arc<Mutex<Option<DownloadInput>>>,
+    }
+
+    impl CommandRunDownloader {
+        fn input(&self) -> Option<DownloadInput> {
+            self.input.lock().unwrap().clone()
+        }
+    }
+
+    impl PlatformDownloader for CommandRunDownloader {
+        fn probe<'a>(
+            &'a self,
+            _input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async { unreachable!("command run tests do not probe") })
+        }
+
+        fn download<'a>(
+            &'a self,
+            input: DownloadInput,
+            sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async move {
+                *self.input.lock().unwrap() = Some(input);
+                sink.emit(crate::platform::DownloadEvent::Progress {
+                    downloaded: 9,
+                    total: Some(9),
+                });
+                Ok(DownloadOutput {
+                    output_path: "D:\\Videos\\out.mp4".into(),
+                    quality: Some("720P".into()),
+                    used_login: false,
+                    bytes_total: Some(9),
+                })
+            })
         }
     }
 }
