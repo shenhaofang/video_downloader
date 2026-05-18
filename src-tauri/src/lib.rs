@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             use tauri::Manager;
 

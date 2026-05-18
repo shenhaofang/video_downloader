@@ -65,6 +65,17 @@ pub fn expected_sidecar_names() -> [&'static str; 2] {
     ["ffmpeg", "ffprobe"]
 }
 
+pub fn sidecar_base_name(tool: &str) -> AppResult<&'static str> {
+    match tool {
+        "ffmpeg" => Ok("ffmpeg"),
+        "ffprobe" => Ok("ffprobe"),
+        _ => Err(AppError::structured(
+            ErrorCode::EngineMissing,
+            "unknown bundled tool",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +148,55 @@ mod tests {
     #[test]
     fn expected_sidecar_names_include_ffmpeg_and_ffprobe() {
         assert_eq!(expected_sidecar_names(), ["ffmpeg", "ffprobe"]);
+    }
+
+    #[test]
+    fn accepts_only_bundled_media_tools() {
+        assert_eq!(sidecar_base_name("ffmpeg").unwrap(), "ffmpeg");
+        assert_eq!(sidecar_base_name("ffprobe").unwrap(), "ffprobe");
+        assert_eq!(
+            sidecar_base_name("yt-dlp").unwrap_err().code(),
+            ErrorCode::EngineMissing
+        );
+    }
+
+    #[test]
+    fn capability_allows_only_bundled_media_sidecars() {
+        let capability_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities")
+            .join("default.json");
+        let text = fs::read_to_string(capability_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let permissions = json["permissions"].as_array().unwrap();
+        let shell_permissions = permissions
+            .iter()
+            .filter(|entry| {
+                entry
+                    .get("identifier")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|identifier| identifier.starts_with("shell:"))
+                    || entry
+                        .as_str()
+                        .is_some_and(|identifier| identifier.starts_with("shell:"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(shell_permissions.len(), 1);
+        let shell_permission = permissions
+            .iter()
+            .find(|entry| entry["identifier"] == "shell:allow-execute")
+            .expect("missing constrained shell execute permission");
+        let allowed = shell_permission["allow"].as_array().unwrap();
+        let names = allowed
+            .iter()
+            .map(|entry| {
+                assert_eq!(entry["sidecar"], true);
+                assert!(entry.get("cmd").is_none());
+                assert_eq!(entry["args"], false);
+                entry["name"].as_str().unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["binaries/ffmpeg", "binaries/ffprobe"]);
     }
 
     fn temp_test_dir() -> PathBuf {

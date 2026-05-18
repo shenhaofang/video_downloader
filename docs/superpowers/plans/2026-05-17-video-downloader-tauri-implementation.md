@@ -2583,12 +2583,14 @@ git commit -m "feat: wire durable tauri app state"
 ## Task 14: Add Real Tool Execution Boundaries
 
 **Files:**
+- Modify: `src-tauri/Cargo.toml`
+- Modify: `src-tauri/Cargo.lock`
+- Modify: `src-tauri/src/lib.rs`
 - Modify: `src-tauri/src/media.rs`
-- Modify: `src-tauri/src/platform/bilibili/yt_dlp.rs`
 - Modify: `src-tauri/capabilities/default.json`
 - Test: `src-tauri/src/media.rs`
 
-- [ ] **Step 1: Add ffmpeg sidecar naming test**
+- [x] **Step 1: Add ffmpeg sidecar naming test**
 
 Modify `src-tauri/src/media.rs` and add:
 
@@ -2614,11 +2616,11 @@ mod sidecar_tests {
 }
 ```
 
-- [ ] **Step 2: Lock shell permissions to known sidecars**
+- [x] **Step 2: Lock shell permissions to known sidecars**
 
 Ensure `src-tauri/capabilities/default.json` contains only `ffmpeg` and `ffprobe` sidecars for bundled media. Do not grant unrestricted shell execution.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 ```powershell
 cd src-tauri
@@ -2627,10 +2629,20 @@ cargo test media
 
 Expected: sidecar tests pass.
 
-- [ ] **Step 4: Commit tool boundary**
+Task 14 review notes:
+- RED: `cargo test media` failed because `sidecar_base_name` did not exist.
+- RED: capability test failed because `default.json` had no constrained `shell:allow-execute` entry.
+- RED: `cargo test media` then failed in Tauri's build script because `shell:allow-execute` was not registered until `tauri-plugin-shell` was added and initialized.
+- RED: capability test required explicit `"args": false` so sidecar permissions cannot accept arbitrary frontend arguments.
+- RED: review suggested guarding against extra shell permissions, so the capability test now asserts there is exactly one `shell:*` permission.
+- GREEN: `cargo test media` passed with the sidecar whitelist, registered shell plugin, and constrained capability.
+- Verification: `cargo test`, `cargo check`, `cargo fmt --check`, `cargo clippy -- -D warnings`, and `git diff --check` all exited 0.
+- Scope note: actual FFmpeg binaries and `bundle.externalBin` entries remain deferred until the binary distribution task; Task 14 only registers the execution boundary and frontend permission constraints.
+
+- [x] **Step 4: Commit tool boundary**
 
 ```powershell
-git add src-tauri/src/media.rs src-tauri/capabilities/default.json
+git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/lib.rs src-tauri/src/media.rs src-tauri/capabilities/default.json
 git commit -m "feat: constrain bundled media tool execution"
 ```
 

@@ -4,6 +4,21 @@
   "description": "Default desktop capability",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/ffmpeg",
+          "sidecar": true,
+          "args": false
+        },
+        {
+          "name": "binaries/ffprobe",
+          "sidecar": true,
+          "args": false
+        }
+      ]
+    }
   ]
 }
