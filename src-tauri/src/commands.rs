@@ -1,5 +1,7 @@
 use crate::app_state::AppState;
-use crate::auth::bilibili::LoginQr;
+use crate::auth::bilibili::{
+    poll_login_qr, request_login_qr, LoginPollOutcome, LoginPollResult, LoginQr,
+};
 use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
@@ -25,6 +27,11 @@ pub struct ToolStatus {
     pub ytdlp: String,
     pub ffmpeg: String,
     pub ffprobe: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollLoginCommand {
+    pub qrcode_key: String,
 }
 
 #[tauri::command]
@@ -57,6 +64,14 @@ pub async fn start_bilibili_login(state: tauri::State<'_, AppState>) -> AppResul
 }
 
 #[tauri::command]
+pub async fn poll_bilibili_login(
+    state: tauri::State<'_, AppState>,
+    input: PollLoginCommand,
+) -> AppResult<LoginPollResult> {
+    poll_bilibili_login_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
 pub async fn clear_bilibili_login(state: tauri::State<'_, AppState>) -> AppResult<()> {
     clear_bilibili_login_from_state(state.inner()).await
 }
@@ -78,8 +93,33 @@ fn list_platform_logins_from_state(state: &AppState) -> AppResult<Vec<PlatformLo
     }])
 }
 
-async fn start_bilibili_login_from_state(state: &AppState) -> AppResult<LoginQr> {
-    Ok(state.bilibili_auth.create_mock_qr())
+async fn start_bilibili_login_from_state(_state: &AppState) -> AppResult<LoginQr> {
+    request_login_qr(&reqwest::Client::new()).await
+}
+
+async fn poll_bilibili_login_from_state(
+    state: &AppState,
+    input: PollLoginCommand,
+) -> AppResult<LoginPollResult> {
+    let outcome = poll_login_qr(&reqwest::Client::new(), &input.qrcode_key).await?;
+    persist_bilibili_poll_outcome(state, outcome)
+}
+
+fn persist_bilibili_poll_outcome(
+    state: &AppState,
+    outcome: LoginPollOutcome,
+) -> AppResult<LoginPollResult> {
+    if outcome.result.status == "confirmed" {
+        let cookies = outcome.cookies.ok_or_else(|| {
+            crate::errors::AppError::structured(
+                crate::errors::ErrorCode::PlatformChanged,
+                "missing login cookies",
+            )
+        })?;
+        state.bilibili_auth.save_cookie_string(cookies)?;
+    }
+
+    Ok(outcome.result)
 }
 
 async fn clear_bilibili_login_from_state(state: &AppState) -> AppResult<()> {
@@ -141,16 +181,6 @@ mod tests {
                 status: "未登录".into(),
             }]
         );
-        cleanup_state(state).await;
-    }
-
-    #[tokio::test]
-    async fn start_bilibili_login_returns_mock_qr() {
-        let state = command_test_state().await;
-        let qr = start_bilibili_login_from_state(&state).await.unwrap();
-
-        assert_eq!(qr.qrcode_key, "mock-qrcode-key");
-        assert!(qr.url.starts_with("https://passport.bilibili.com/"));
         cleanup_state(state).await;
     }
 
@@ -274,13 +304,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_bilibili_login_uses_managed_auth_for_mock_qr() {
+    async fn confirmed_poll_outcome_saves_managed_session() {
         let state = command_test_state().await;
 
-        let qr = start_bilibili_login_from_state(&state).await.unwrap();
+        let result = persist_bilibili_poll_outcome(
+            &state,
+            LoginPollOutcome {
+                result: LoginPollResult {
+                    status: "confirmed".into(),
+                    message: "登录成功".into(),
+                },
+                cookies: Some("SESSDATA=auth-cookie".into()),
+            },
+        )
+        .unwrap();
 
-        assert_eq!(qr.qrcode_key, "mock-qrcode-key");
-        assert!(qr.url.starts_with("https://passport.bilibili.com/"));
+        assert_eq!(result.status, "confirmed");
+        assert_eq!(
+            state.bilibili_auth.load_cookie_string().unwrap(),
+            Some("SESSDATA=auth-cookie".into())
+        );
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn pending_poll_outcome_does_not_save_session() {
+        let state = command_test_state().await;
+
+        let result = persist_bilibili_poll_outcome(
+            &state,
+            LoginPollOutcome {
+                result: LoginPollResult {
+                    status: "pending".into(),
+                    message: "未扫码".into(),
+                },
+                cookies: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.status, "pending");
+        assert!(state.bilibili_auth.load_cookie_string().unwrap().is_none());
         cleanup_state(state).await;
     }
 

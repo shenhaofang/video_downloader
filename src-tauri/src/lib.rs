@@ -28,6 +28,7 @@ pub fn run() {
             commands::create_task,
             commands::list_platform_logins,
             commands::start_bilibili_login,
+            commands::poll_bilibili_login,
             commands::clear_bilibili_login,
             commands::get_tool_status
         ])

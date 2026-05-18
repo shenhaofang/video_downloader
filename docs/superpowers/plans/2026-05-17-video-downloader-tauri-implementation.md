@@ -3065,7 +3065,7 @@ Task 17 review notes:
 - Modify: `src-tauri/src/commands.rs`
 - Test: `src-tauri/src/auth/bilibili.rs`
 
-- [ ] **Step 1: Add login response parsers**
+- [x] **Step 1: Add login response parsers**
 
 Modify `src-tauri/src/auth/bilibili.rs` and add parser structs:
 
@@ -3106,7 +3106,7 @@ mod qr_parser_tests {
 }
 ```
 
-- [ ] **Step 2: Implement QR generation HTTP call**
+- [x] **Step 2: Implement QR generation and polling HTTP calls**
 
 Add:
 
@@ -3124,25 +3124,32 @@ pub async fn request_login_qr(client: &reqwest::Client) -> AppResult<LoginQr> {
 }
 ```
 
-- [ ] **Step 3: Update command to use real QR request**
+- [x] **Step 3: Update commands to use real QR request and poll result persistence**
 
-Modify `start_bilibili_login` to call `request_login_qr(&reqwest::Client::new()).await`.
+Modify `start_bilibili_login` to call `request_login_qr(&reqwest::Client::new()).await`, add `poll_bilibili_login`, and save confirmed login cookies through the encrypted bilibili session store.
 
-- [ ] **Step 4: Run parser tests**
+- [x] **Step 4: Run parser tests**
 
 ```powershell
 cd src-tauri
 cargo test qr_parser_tests
 ```
 
-Expected: parser test passes without network.
+Expected: parser and local HTTP tests pass without network. The live QR generation test is ignored by default and can be run manually with `cargo test live_request_login_qr_returns_key -- --ignored`.
 
-- [ ] **Step 5: Commit QR polling foundation**
+- [x] **Step 5: Commit QR polling foundation**
 
 ```powershell
 git add src-tauri/src/auth/bilibili.rs src-tauri/src/commands.rs
 git commit -m "feat: add bilibili qr login request"
 ```
+
+Task 18 review notes:
+- RED: `cargo test qr` failed first because QR generation parsing, poll parsing, Set-Cookie extraction, and local HTTP request helpers did not exist.
+- GREEN: QR generation now parses current Bilibili `qrcode_key` responses and `request_login_qr` calls the live generate endpoint.
+- GREEN: QR polling now maps pending, scanned, expired, and confirmed statuses; unknown status codes fail as `PlatformChanged`.
+- GREEN: Confirmed poll responses extract `Set-Cookie` pairs and `poll_bilibili_login` persists them via the encrypted bilibili session store.
+- Verification: `cargo test qr`, `cargo test bilibili`, `cargo test commands::tests`, `cargo test live_request_login_qr_returns_key -- --ignored`, `cargo test`, `cargo check`, `cargo fmt --check`, `cargo clippy -- -D warnings`, and `git diff --check`.
 
 ## Task 19: End-To-End Verification Pass
 
