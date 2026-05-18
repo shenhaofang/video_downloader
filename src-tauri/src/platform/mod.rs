@@ -15,12 +15,20 @@ pub struct ProbeInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadItemMetadata {
+    pub bvid: String,
+    pub cid: u64,
+    pub page: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadItem {
     pub title: String,
     pub output_file: String,
     pub quality: Option<String>,
     pub requires_login: bool,
     pub bytes_total: Option<u64>,
+    pub metadata: Option<DownloadItemMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

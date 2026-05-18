@@ -1,7 +1,7 @@
 use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::platform::{
-    DownloadInput, DownloadItem, DownloadOutput, EventSink, PlatformDownloader, ProbeInput,
-    ProbeResult,
+    DownloadInput, DownloadItem, DownloadItemMetadata, DownloadOutput, EventSink,
+    PlatformDownloader, ProbeInput, ProbeResult,
 };
 use reqwest::Url;
 use std::future::Future;
@@ -69,6 +69,7 @@ fn is_valid_bvid(value: &str) -> bool {
 
 fn probe_result_from_view_info(
     info: crate::platform::bilibili::api::ViewInfo,
+    bvid: &str,
     has_login: bool,
 ) -> ProbeResult {
     let quality = if has_login { "1080P" } else { "720P" };
@@ -86,6 +87,11 @@ fn probe_result_from_view_info(
             quality: Some(quality.into()),
             requires_login: has_login,
             bytes_total: None,
+            metadata: Some(DownloadItemMetadata {
+                bvid: bvid.to_string(),
+                cid: page.cid,
+                page: page.page,
+            }),
         })
         .collect();
 
@@ -134,7 +140,7 @@ impl PlatformDownloader for NativeBilibiliDownloader {
             let client = reqwest::Client::new();
             let info = fetch_view_info(&client, &id.bvid).await?;
 
-            Ok(probe_result_from_view_info(info, input.has_login))
+            Ok(probe_result_from_view_info(info, &id.bvid, input.has_login))
         })
     }
 
@@ -270,6 +276,7 @@ mod tests {
                     },
                 ],
             },
+            "BV1xx411c7mD",
             true,
         );
 
@@ -281,6 +288,14 @@ mod tests {
         assert_eq!(result.items[0].quality, Some("1080P".into()));
         assert!(result.items[0].requires_login);
         assert_eq!(result.items[0].bytes_total, None);
+        assert_eq!(
+            result.items[0].metadata,
+            Some(crate::platform::DownloadItemMetadata {
+                bvid: "BV1xx411c7mD".into(),
+                cid: 111,
+                page: 1,
+            })
+        );
     }
 
     #[test]
@@ -294,6 +309,7 @@ mod tests {
                     title: "B站下载链路测试".into(),
                 }],
             },
+            "BV1xx411c7mD",
             false,
         );
 
@@ -354,6 +370,7 @@ mod tests {
                         quality: Some("720P".into()),
                         requires_login: false,
                         bytes_total: None,
+                        metadata: None,
                     },
                     output_path: "D:\\Videos\\BV1xx411c7mD P1.mp4".into(),
                 },

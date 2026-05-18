@@ -27,6 +27,9 @@ mod tests {
             max_retries: 3,
             error_code: Some(code.into()),
             error_message: Some("failed".into()),
+            bvid: None,
+            cid: None,
+            page: None,
         }
     }
 

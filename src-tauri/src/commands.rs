@@ -4,8 +4,9 @@ use crate::auth::bilibili::{
 };
 use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
+use crate::platform::bilibili::native::NativeBilibiliDownloader;
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
-use crate::platform::mock::MockDownloader;
+use crate::platform::PlatformDownloader;
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use serde::{Deserialize, Serialize};
 
@@ -40,17 +41,11 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> AppResult<AppConfi
 }
 
 #[tauri::command]
-pub async fn create_task(input: CreateTaskCommand) -> AppResult<CreatedTaskGroup> {
-    create_group_from_probe(
-        &MockDownloader,
-        CreateTaskRequest {
-            url: input.url,
-            output_dir: input.output_dir,
-            engine: DownloadEngine::Native,
-            has_login: input.has_login,
-        },
-    )
-    .await
+pub async fn create_task(
+    state: tauri::State<'_, AppState>,
+    input: CreateTaskCommand,
+) -> AppResult<CreatedTaskGroup> {
+    create_task_from_state(state.inner(), input).await
 }
 
 #[tauri::command]
@@ -83,6 +78,53 @@ pub async fn get_tool_status(state: tauri::State<'_, AppState>) -> AppResult<Too
 
 async fn get_config_from_state(state: &AppState) -> AppResult<AppConfig> {
     state.storage.load_config().await
+}
+
+async fn create_task_from_state(
+    state: &AppState,
+    input: CreateTaskCommand,
+) -> AppResult<CreatedTaskGroup> {
+    let config = state.storage.load_config().await?;
+    match config.default_engine {
+        DownloadEngine::Native => {
+            create_task_with_downloader_from_state(
+                state,
+                input,
+                config.default_engine,
+                &NativeBilibiliDownloader,
+            )
+            .await
+        }
+        DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
+            crate::errors::ErrorCode::EngineMissing,
+            "yt-dlp task creation is not wired yet",
+        )),
+    }
+}
+
+async fn create_task_with_downloader_from_state(
+    state: &AppState,
+    input: CreateTaskCommand,
+    engine: DownloadEngine,
+    downloader: &dyn PlatformDownloader,
+) -> AppResult<CreatedTaskGroup> {
+    let has_login = input.has_login || state.bilibili_auth.load_cookie_string()?.is_some();
+    let result = create_group_from_probe(
+        downloader,
+        CreateTaskRequest {
+            url: input.url,
+            output_dir: input.output_dir,
+            engine,
+            has_login,
+        },
+    )
+    .await?;
+    state.storage.insert_group(&result.group).await?;
+    for task in &result.tasks {
+        state.storage.insert_task(task).await?;
+    }
+
+    Ok(result)
 }
 
 fn list_platform_logins_from_state(state: &AppState) -> AppResult<Vec<PlatformLoginRow>> {
@@ -148,16 +190,30 @@ mod tests {
     use super::*;
     use crate::auth::bilibili::BilibiliAuth;
     use crate::auth::session_store::SessionStore;
+    use crate::errors::AppResult;
     use crate::models::DownloadEngine;
+    use crate::platform::mock::MockDownloader;
+    use crate::platform::{
+        DownloadInput, DownloadItem, DownloadItemMetadata, DownloadOutput, EventSink,
+        PlatformDownloader, ProbeInput, ProbeResult,
+    };
     use std::fs;
+    use std::future::Future;
+    use std::pin::Pin;
 
     #[tokio::test]
     async fn create_task_uses_mock_collection() {
-        let result = create_task(CreateTaskCommand {
-            url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
-            output_dir: "D:\\Videos".into(),
-            has_login: true,
-        })
+        let state = command_test_state().await;
+        let result = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: true,
+            },
+            DownloadEngine::Native,
+            &MockDownloader,
+        )
         .await
         .unwrap();
 
@@ -167,6 +223,68 @@ mod tests {
             .unwrap()
             .to_string_lossy();
         assert_eq!(first_file_name, "01 - 安装 Tauri.mp4");
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn create_task_from_state_uses_config_login_and_persists_tasks() {
+        let state = command_test_state().await;
+        state
+            .bilibili_auth
+            .save_cookie_string("SESSDATA=auth-cookie".into())
+            .unwrap();
+
+        let result = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.group.engine, DownloadEngine::Native);
+        assert_eq!(result.tasks[0].bvid.as_deref(), Some("BV1xx411c7mD"));
+        assert!(result.tasks[0].used_login);
+
+        let persisted = state
+            .storage
+            .load_tasks_for_group(result.group.id)
+            .await
+            .unwrap();
+        assert_eq!(persisted, result.tasks);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn create_task_from_state_reports_missing_ytdlp_creation_path() {
+        let state = command_test_state().await;
+        state
+            .storage
+            .save_config(&AppConfig {
+                default_engine: DownloadEngine::YtDlp,
+                ..AppConfig::default()
+            })
+            .await
+            .unwrap();
+
+        let err = create_task_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), crate::errors::ErrorCode::EngineMissing);
+        cleanup_state(state).await;
     }
 
     #[tokio::test]
@@ -392,5 +510,41 @@ mod tests {
             }
         }
         panic!("failed to remove test app state dir {}", path.display());
+    }
+
+    struct RecordingDownloader;
+
+    impl PlatformDownloader for RecordingDownloader {
+        fn probe<'a>(
+            &'a self,
+            input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(ProbeResult {
+                    group_title: "Rust 桌面应用入门".into(),
+                    used_login: input.has_login,
+                    items: vec![DownloadItem {
+                        title: "安装 Tauri".into(),
+                        output_file: "安装 Tauri.mp4".into(),
+                        quality: Some("1080P".into()),
+                        requires_login: input.has_login,
+                        bytes_total: None,
+                        metadata: Some(DownloadItemMetadata {
+                            bvid: "BV1xx411c7mD".into(),
+                            cid: 111,
+                            page: 1,
+                        }),
+                    }],
+                })
+            })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _input: DownloadInput,
+            _sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async { unreachable!("command create tests do not download") })
+        }
     }
 }

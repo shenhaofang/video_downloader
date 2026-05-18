@@ -36,8 +36,33 @@ impl Storage {
                 .await
                 .map_err(storage_error)?;
         }
+        self.ensure_download_task_columns().await?;
 
         Ok(())
+    }
+
+    async fn ensure_download_task_columns(&self) -> AppResult<()> {
+        for (name, definition) in [("bvid", "TEXT"), ("cid", "INTEGER"), ("page", "INTEGER")] {
+            if !self.download_task_column_exists(name).await? {
+                sqlx::query(&format!(
+                    "ALTER TABLE download_tasks ADD COLUMN {name} {definition}"
+                ))
+                .execute(&self.pool)
+                .await
+                .map_err(storage_error)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn download_task_column_exists(&self, name: &str) -> AppResult<bool> {
+        let rows = sqlx::query("PRAGMA table_info(download_tasks)")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(storage_error)?;
+
+        Ok(rows.iter().any(|row| row.get::<String, _>("name") == name))
     }
 
     pub async fn load_config(&self) -> AppResult<AppConfig> {
@@ -98,7 +123,7 @@ impl Storage {
 
     pub async fn insert_task(&self, task: &DownloadTask) -> AppResult<()> {
         sqlx::query(
-            "INSERT INTO download_tasks (id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO download_tasks (id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message, bvid, cid, page) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(task.id.to_string())
         .bind(task.group_id.to_string())
@@ -114,11 +139,26 @@ impl Storage {
         .bind(task.max_retries as i64)
         .bind(&task.error_code)
         .bind(&task.error_message)
+        .bind(&task.bvid)
+        .bind(task.cid.map(|value| value as i64))
+        .bind(task.page.map(|value| value as i64))
         .execute(&self.pool)
         .await
         .map_err(storage_error)?;
 
         Ok(())
+    }
+
+    pub async fn load_tasks_for_group(&self, group_id: Uuid) -> AppResult<Vec<DownloadTask>> {
+        let rows = sqlx::query(
+            "SELECT id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message, bvid, cid, page FROM download_tasks WHERE group_id = ? ORDER BY rowid",
+        )
+        .bind(group_id.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+
+        rows.into_iter().map(task_from_row).collect()
     }
 
     pub async fn append_log(&self, task_id: Uuid, line: &str) -> AppResult<()> {
@@ -152,6 +192,20 @@ fn parse_engine(value: &str) -> DownloadEngine {
     }
 }
 
+fn parse_state(value: &str) -> TaskState {
+    match value {
+        "pending" => TaskState::Pending,
+        "probing" => TaskState::Probing,
+        "downloading" => TaskState::Downloading,
+        "merging" => TaskState::Merging,
+        "completed" => TaskState::Completed,
+        "failed" => TaskState::Failed,
+        "interrupted" => TaskState::Interrupted,
+        "cancelled" => TaskState::Cancelled,
+        _ => TaskState::Queued,
+    }
+}
+
 fn state_name(state: TaskState) -> &'static str {
     match state {
         TaskState::Pending => "pending",
@@ -168,6 +222,40 @@ fn state_name(state: TaskState) -> &'static str {
 
 fn storage_error(err: sqlx::Error) -> AppError {
     AppError::structured(ErrorCode::FilesystemError, err.to_string())
+}
+
+fn task_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<DownloadTask> {
+    let id = parse_uuid(&row.get::<String, _>("id"))?;
+    let group_id = parse_uuid(&row.get::<String, _>("group_id"))?;
+    let cid = row.get::<Option<i64>, _>("cid").map(|value| value as u64);
+    let page = row.get::<Option<i64>, _>("page").map(|value| value as u32);
+
+    Ok(DownloadTask {
+        id,
+        group_id,
+        title: row.get("title"),
+        output_file: row.get("output_file"),
+        state: parse_state(&row.get::<String, _>("state")),
+        engine: parse_engine(&row.get::<String, _>("engine")),
+        quality: row.get("quality"),
+        used_login: row.get::<i64, _>("used_login") != 0,
+        bytes_downloaded: row.get::<i64, _>("bytes_downloaded") as u64,
+        bytes_total: row
+            .get::<Option<i64>, _>("bytes_total")
+            .map(|value| value as u64),
+        retry_count: row.get::<i64, _>("retry_count") as u8,
+        max_retries: row.get::<i64, _>("max_retries") as u8,
+        error_code: row.get("error_code"),
+        error_message: row.get("error_message"),
+        bvid: row.get("bvid"),
+        cid,
+        page,
+    })
+}
+
+fn parse_uuid(value: &str) -> AppResult<Uuid> {
+    Uuid::parse_str(value)
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))
 }
 
 #[cfg(test)]
@@ -294,11 +382,17 @@ mod tests {
             max_retries: 3,
             error_code: None,
             error_message: None,
+            bvid: Some("BV1xx411c7mD".into()),
+            cid: Some(111),
+            page: Some(1),
         };
 
         storage.insert_group(&group).await.unwrap();
         storage.insert_task(&task).await.unwrap();
         storage.append_log(task.id, "[task] queued").await.unwrap();
+
+        let loaded = storage.load_tasks_for_group(group.id).await.unwrap();
+        assert_eq!(loaded, vec![task]);
 
         db.close().await;
     }

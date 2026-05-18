@@ -51,6 +51,9 @@ pub struct DownloadTask {
     pub max_retries: u8,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    pub bvid: Option<String>,
+    pub cid: Option<u64>,
+    pub page: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -79,6 +79,9 @@ pub async fn create_group_from_probe(
                 max_retries: 3,
                 error_code: None,
                 error_message: None,
+                bvid: item.metadata.as_ref().map(|metadata| metadata.bvid.clone()),
+                cid: item.metadata.as_ref().map(|metadata| metadata.cid),
+                page: item.metadata.as_ref().map(|metadata| metadata.page),
             }
         })
         .collect();
@@ -97,8 +100,14 @@ fn strip_leading_numeric_prefix(title: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::AppResult;
     use crate::models::DownloadEngine;
     use crate::platform::mock::MockDownloader;
+    use crate::platform::{
+        DownloadInput, DownloadItem, DownloadItemMetadata, DownloadOutput, EventSink, ProbeResult,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
 
     #[tokio::test]
     async fn creates_group_with_child_tasks() {
@@ -152,5 +161,60 @@ mod tests {
             .unwrap()
             .to_string_lossy();
         assert!(!filename.starts_with("01 -"));
+    }
+
+    #[tokio::test]
+    async fn copies_probe_metadata_to_download_tasks() {
+        let result = create_group_from_probe(
+            &MetadataDownloader,
+            CreateTaskRequest {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                engine: DownloadEngine::Native,
+                has_login: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.tasks[0].bvid.as_deref(), Some("BV1xx411c7mD"));
+        assert_eq!(result.tasks[0].cid, Some(111));
+        assert_eq!(result.tasks[0].page, Some(1));
+    }
+
+    struct MetadataDownloader;
+
+    impl PlatformDownloader for MetadataDownloader {
+        fn probe<'a>(
+            &'a self,
+            _input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async {
+                Ok(ProbeResult {
+                    group_title: "Rust 桌面应用入门".into(),
+                    used_login: false,
+                    items: vec![DownloadItem {
+                        title: "安装 Tauri".into(),
+                        output_file: "安装 Tauri.mp4".into(),
+                        quality: Some("1080P".into()),
+                        requires_login: false,
+                        bytes_total: None,
+                        metadata: Some(DownloadItemMetadata {
+                            bvid: "BV1xx411c7mD".into(),
+                            cid: 111,
+                            page: 1,
+                        }),
+                    }],
+                })
+            })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _input: DownloadInput,
+            _sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async { unreachable!("task creation tests do not download") })
+        }
     }
 }

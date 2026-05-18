@@ -51,6 +51,7 @@
 
 - The real frontend still does not expose QR-code login controls. The backend commands exist, but the expanded bilibili login detail is still placeholder text.
 - Native media download is not wired end to end. The parser, streaming download helper, and ffmpeg merge boundary exist, but `NativeBilibiliDownloader::download()` still returns a staged error until task metadata carries `cid` / stream URLs and bundled ffmpeg is configured.
-- `create_task` still uses the mock downloader path in the Tauri command layer, so the visible task creation flow is not yet a real bilibili download.
+- `create_task` now uses real native bilibili probe by default and persists created records, but it still only creates queued tasks; no scheduler starts real download work yet.
+- Created task records are queryable from storage, but the frontend does not reload persisted task history on startup yet.
 - Startup login verification is not implemented; stored sessions are loaded by presence, not revalidated against Bilibili.
 - Bundled `ffmpeg` / `ffprobe` binaries and license profile are not configured for distribution.

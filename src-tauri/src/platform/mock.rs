@@ -25,6 +25,7 @@ impl PlatformDownloader for MockDownloader {
                         quality: Some("1080P".into()),
                         requires_login: true,
                         bytes_total: Some(1_200_000_000),
+                        metadata: None,
                     },
                     DownloadItem {
                         title: "02 - Rust 命令与事件".into(),
@@ -32,6 +33,7 @@ impl PlatformDownloader for MockDownloader {
                         quality: Some("1080P".into()),
                         requires_login: true,
                         bytes_total: Some(800_000_000),
+                        metadata: None,
                     },
                     DownloadItem {
                         title: "03 - 打包与发布".into(),
@@ -39,6 +41,7 @@ impl PlatformDownloader for MockDownloader {
                         quality: Some("720P".into()),
                         requires_login: false,
                         bytes_total: Some(384_000_000),
+                        metadata: None,
                     },
                 ]
             } else {
@@ -48,6 +51,7 @@ impl PlatformDownloader for MockDownloader {
                     quality: Some("720P".into()),
                     requires_login: false,
                     bytes_total: Some(384_000_000),
+                    metadata: None,
                 }]
             };
 
@@ -152,6 +156,7 @@ mod tests {
             quality: Some("720P".into()),
             requires_login: true,
             bytes_total: Some(10),
+            metadata: None,
         };
 
         let output = downloader
