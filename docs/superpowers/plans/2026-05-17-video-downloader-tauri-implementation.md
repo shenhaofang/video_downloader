@@ -2982,7 +2982,7 @@ git commit -m "feat: add native bilibili media selection"
 - Modify: `src-tauri/src/commands.rs`
 - Test: `src-tauri/src/platform/bilibili/yt_dlp.rs`
 
-- [ ] **Step 1: Add `yt-dlp` command builder tests**
+- [x] **Step 1: Add `yt-dlp` command builder tests**
 
 Modify `src-tauri/src/platform/bilibili/yt_dlp.rs` and add:
 
@@ -3017,7 +3017,7 @@ mod download_arg_tests {
 }
 ```
 
-- [ ] **Step 2: Add execution function boundary**
+- [x] **Step 2: Add execution function boundary**
 
 Add a function that accepts the resolved `yt-dlp` path and generated args:
 
@@ -3036,7 +3036,7 @@ pub async fn run_ytdlp(path: &Path, args: &[String]) -> AppResult<String> {
 }
 ```
 
-- [ ] **Step 3: Run adapter tests**
+- [x] **Step 3: Run adapter tests**
 
 ```powershell
 cd src-tauri
@@ -3045,12 +3045,18 @@ cargo test yt_dlp
 
 Expected: argument builder tests pass. Execution function is covered in the manual verification pass because it requires a local `yt-dlp` binary.
 
-- [ ] **Step 4: Commit adapter execution**
+- [x] **Step 4: Commit adapter execution**
 
 ```powershell
 git add src-tauri/src/platform/bilibili/yt_dlp.rs
 git commit -m "feat: add yt-dlp execution adapter"
 ```
+
+Task 17 review notes:
+- RED: `cargo test yt_dlp` failed first because `ytdlp_download_args` and `run_ytdlp` did not exist.
+- GREEN: `ytdlp_download_args` now builds newline progress output, mp4 merge output, output template, optional cookie file, and URL ordering.
+- GREEN: `run_ytdlp` executes a resolved local binary path, returns stdout on success, maps launch failures to `EngineMissing`, and maps non-zero process exits to `UnknownError`.
+- Verification: `cargo test yt_dlp`, `cargo test`, `cargo check`, `cargo fmt --check`, `cargo clippy -- -D warnings`, and `git diff --check`.
 
 ## Task 18: Implement Real Bilibili QR Login Polling
 
