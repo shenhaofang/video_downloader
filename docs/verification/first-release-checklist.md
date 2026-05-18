@@ -7,7 +7,7 @@
 - [x] `cargo test` succeeds in `src-tauri`.
 - [x] `cargo check` succeeds in `src-tauri`.
 - [x] `cargo clippy -- -D warnings` succeeds in `src-tauri`.
-- [ ] `npm run tauri:dev` opens the app window.
+- [x] `npm run tauri:dev` opens the app window.
 
 ## UI
 
