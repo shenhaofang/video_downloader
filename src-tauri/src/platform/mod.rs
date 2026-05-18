@@ -1,3 +1,4 @@
+pub mod bilibili;
 pub mod mock;
 
 use crate::errors::AppResult;

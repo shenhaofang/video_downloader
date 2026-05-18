@@ -1998,21 +1998,20 @@ git commit -m "feat: add encrypted bilibili session storage"
 - Modify: `src-tauri/src/platform/mod.rs`
 - Test: `src-tauri/src/platform/bilibili/native.rs`
 
-- [ ] **Step 1: Add URL parser tests and implementation**
+- [x] **Step 1: Add URL parser tests and implementation**
 
 Create `src-tauri/src/platform/bilibili/mod.rs`:
 
 ```rust
 pub mod native;
-pub mod yt_dlp;
 ```
 
 Create `src-tauri/src/platform/bilibili/native.rs`:
 
 ```rust
 use crate::errors::{AppError, AppResult, ErrorCode};
-use crate::models::DownloadEngine;
 use crate::platform::{DownloadInput, DownloadOutput, EventSink, PlatformDownloader, ProbeInput, ProbeResult};
+use reqwest::Url;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -2022,17 +2021,35 @@ pub struct BilibiliVideoId {
 }
 
 pub fn parse_bvid(url: &str) -> AppResult<BilibiliVideoId> {
-    let marker = "/video/";
-    let start = url.find(marker)
-        .map(|idx| idx + marker.len())
+    let url = url.trim();
+    let parsed = Url::parse(url)
+        .or_else(|_| Url::parse(&format!("https://{url}")))
+        .map_err(|_| AppError::structured(ErrorCode::UnsupportedContent, "invalid bilibili video url"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(AppError::structured(ErrorCode::UnsupportedContent, "unsupported bilibili video scheme"));
+    }
+    let host = parsed.host_str()
+        .ok_or_else(|| AppError::structured(ErrorCode::UnsupportedContent, "missing bilibili video host"))?;
+    if host != "bilibili.com" && !host.ends_with(".bilibili.com") {
+        return Err(AppError::structured(ErrorCode::UnsupportedContent, "unsupported bilibili video host"));
+    }
+    let mut segments = parsed.path_segments()
         .ok_or_else(|| AppError::structured(ErrorCode::UnsupportedContent, "missing bilibili video marker"))?;
-    let tail = &url[start..];
-    let bvid = tail.split(['?', '/', '#']).next().unwrap_or("").to_string();
-    if bvid.starts_with("BV") && bvid.len() >= 10 {
-        Ok(BilibiliVideoId { bvid })
+    if segments.next() != Some("video") {
+        return Err(AppError::structured(ErrorCode::UnsupportedContent, "missing bilibili video marker"));
+    }
+    let bvid = segments.next().unwrap_or_default();
+    if is_valid_bvid(bvid) {
+        Ok(BilibiliVideoId { bvid: bvid.to_string() })
     } else {
         Err(AppError::structured(ErrorCode::UnsupportedContent, "missing BV id"))
     }
+}
+
+fn is_valid_bvid(value: &str) -> bool {
+    value.len() == 12
+        && value.starts_with("BV")
+        && value.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 #[derive(Default)]
@@ -2063,10 +2080,6 @@ impl PlatformDownloader for NativeBilibiliDownloader {
     }
 }
 
-pub fn engine_name() -> DownloadEngine {
-    DownloadEngine::Native
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2078,14 +2091,73 @@ mod tests {
     }
 
     #[test]
+    fn parses_bv_id_before_path_suffix() {
+        let parsed = parse_bvid("https://www.bilibili.com/video/BV1xx411c7mD/?p=2#reply").unwrap();
+        assert_eq!(parsed.bvid, "BV1xx411c7mD");
+    }
+
+    #[test]
+    fn parses_video_url_without_scheme() {
+        let parsed = parse_bvid("www.bilibili.com/video/BV1xx411c7mD/?next=https://example.com/path").unwrap();
+        assert_eq!(parsed.bvid, "BV1xx411c7mD");
+    }
+
+    #[test]
+    fn parses_trimmed_root_and_mobile_hosts() {
+        for url in [
+            " https://bilibili.com/video/BV1xx411c7mD/\n",
+            "\thttps://m.bilibili.com/video/BV1xx411c7mD/",
+        ] {
+            let parsed = parse_bvid(url).unwrap();
+            assert_eq!(parsed.bvid, "BV1xx411c7mD");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_url() {
+        let err = parse_bvid("  ").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::UnsupportedContent);
+    }
+
+    #[test]
     fn rejects_non_video_url() {
         let err = parse_bvid("https://space.bilibili.com/1").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::UnsupportedContent);
+    }
+
+    #[test]
+    fn rejects_lookalike_bilibili_host() {
+        let err = parse_bvid("https://notbilibili.com/video/BV1xx411c7mD").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::UnsupportedContent);
+    }
+
+    #[test]
+    fn rejects_bilibili_video_link_embedded_in_query() {
+        let err = parse_bvid("https://example.com/watch?next=https://www.bilibili.com/video/BV1xx411c7mD").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::UnsupportedContent);
+    }
+
+    #[test]
+    fn rejects_invalid_bv_id_shape() {
+        for url in [
+            "https://www.bilibili.com/video/BV12345678",
+            "https://www.bilibili.com/video/BV!!!!!!!!!!",
+            "https://www.bilibili.com/video/BV1234567890extra",
+        ] {
+            let err = parse_bvid(url).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::UnsupportedContent);
+        }
+    }
+
+    #[test]
+    fn rejects_non_http_video_url() {
+        let err = parse_bvid("ftp://www.bilibili.com/video/BV1xx411c7mD").unwrap_err();
         assert_eq!(err.code(), ErrorCode::UnsupportedContent);
     }
 }
 ```
 
-- [ ] **Step 2: Register bilibili modules**
+- [x] **Step 2: Register bilibili modules**
 
 Modify `src-tauri/src/platform/mod.rs` first line:
 
@@ -2094,7 +2166,7 @@ pub mod bilibili;
 pub mod mock;
 ```
 
-- [ ] **Step 3: Run parser tests**
+- [x] **Step 3: Run parser tests**
 
 ```powershell
 cd src-tauri
@@ -2103,7 +2175,12 @@ cargo test bilibili
 
 Expected: native URL parser tests pass.
 
-- [ ] **Step 4: Commit native parser**
+Observed on 2026-05-18 for Task 10:
+- RED: `cargo test bilibili` failed in `platform::bilibili::native` because parser/probe stubs returned `UnsupportedContent`.
+- RED: parser hardening tests then failed because lookalike hosts, query-embedded links, schemeless links, loose BV ids, and non-http schemes were not handled correctly.
+- GREEN: `cargo test bilibili` passed with 15 passed, 0 failed.
+
+- [x] **Step 4: Commit native parser**
 
 ```powershell
 git add src-tauri/src/platform
