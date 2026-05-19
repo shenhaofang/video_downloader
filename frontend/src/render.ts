@@ -7,6 +7,7 @@ import {
   probeBilibiliPages as defaultProbeBilibiliPages,
   runTask as defaultRunTask,
   saveConfig as defaultSaveConfig,
+  selectOutputDirectory as defaultSelectOutputDirectory,
   startBilibiliLogin as defaultStartBilibiliLogin,
 } from "./api";
 import {
@@ -26,6 +27,7 @@ import { createQrDataUrl as defaultCreateQrDataUrl } from "./qr";
 export interface RenderDependencies {
   createTask?: typeof defaultCreateTask;
   runTask?: typeof defaultRunTask;
+  selectOutputDirectory?: typeof defaultSelectOutputDirectory;
   saveConfig?: typeof defaultSaveConfig;
   startBilibiliLogin?: typeof defaultStartBilibiliLogin;
   pollBilibiliLogin?: typeof defaultPollBilibiliLogin;
@@ -45,6 +47,8 @@ export function renderApp(
 ): void {
   const createTask = dependencies.createTask ?? defaultCreateTask;
   const runTask = dependencies.runTask ?? defaultRunTask;
+  const selectOutputDirectory =
+    dependencies.selectOutputDirectory ?? defaultSelectOutputDirectory;
   const saveConfig = dependencies.saveConfig ?? defaultSaveConfig;
   const startBilibiliLogin = dependencies.startBilibiliLogin ?? defaultStartBilibiliLogin;
   const pollBilibiliLogin = dependencies.pollBilibiliLogin ?? defaultPollBilibiliLogin;
@@ -59,6 +63,7 @@ export function renderApp(
     buildAppShell(root, state, {
       createTask,
       runTask,
+      selectOutputDirectory,
       saveConfig,
       startBilibiliLogin,
       pollBilibiliLogin,
@@ -130,7 +135,7 @@ function buildDownloadsPanel(
 
   const form = element("form", "download-toolbar");
   form.append(field("视频链接", "video-url", "请输入 bilibili 视频或合集链接"));
-  form.append(outputDirectoryField(state));
+  form.append(outputDirectoryField(state, dependencies));
 
   const actions = element("div", "download-actions");
   const probeButton = element("button", "secondary", "探测选集");
@@ -315,7 +320,10 @@ function field(labelText: string, testId: string, placeholder: string): HTMLElem
   return label;
 }
 
-function outputDirectoryField(state: AppState): HTMLElement {
+function outputDirectoryField(
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
   const label = element("label", "field output-field");
   label.append(element("span", "", "输出目录"));
   const input = document.createElement("input");
@@ -323,6 +331,14 @@ function outputDirectoryField(state: AppState): HTMLElement {
   input.value = taskOutputDirectory(state.settings.downloadRoot);
   const button = element("button", "secondary", "选择");
   button.type = "button";
+  button.dataset.testid = "select-output-directory";
+  button.addEventListener("click", async () => {
+    const currentPath = input.value.trim() || taskOutputDirectory(state.settings.downloadRoot);
+    const selectedPath = await dependencies.selectOutputDirectory(currentPath);
+    if (selectedPath) {
+      input.value = selectedPath;
+    }
+  });
   label.append(input, button);
   return label;
 }

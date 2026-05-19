@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   normalizeEngine,
   type AppSettings,
@@ -106,6 +107,25 @@ export async function createTask(input: CreateTaskInput): Promise<CreatedTaskGro
   } catch (error) {
     if (isTauriUnavailable(error)) {
       return fallbackTaskGroup(input.output_dir);
+    }
+    throw error;
+  }
+}
+
+export async function selectOutputDirectory(defaultPath: string): Promise<string | null> {
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath,
+    });
+    if (Array.isArray(selected)) {
+      return selected[0] ?? null;
+    }
+    return selected ?? null;
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return null;
     }
     throw error;
   }

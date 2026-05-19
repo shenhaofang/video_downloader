@@ -9,18 +9,25 @@ import {
   probeBilibiliPages,
   runTask,
   saveConfig,
+  selectOutputDirectory,
   startBilibiliLogin,
 } from "./api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
+const dialogOpenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: dialogOpenMock,
+}));
+
 describe("api fallback detection", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    dialogOpenMock.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -147,6 +154,20 @@ describe("api fallback detection", () => {
         url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
         has_login: false,
       },
+    });
+  });
+
+  test("selects output directory through Tauri dialog", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    dialogOpenMock.mockResolvedValue("E:\\Videos\\bilibili");
+
+    await expect(selectOutputDirectory("D:\\Videos\\bilibili")).resolves.toBe(
+      "E:\\Videos\\bilibili",
+    );
+    expect(dialogOpenMock).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      defaultPath: "D:\\Videos\\bilibili",
     });
   });
 

@@ -444,6 +444,24 @@ mod tests {
         assert!(shell_permissions.is_empty());
     }
 
+    #[test]
+    fn capability_allows_only_dialog_open_command() {
+        let capability_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities")
+            .join("default.json");
+        let text = fs::read_to_string(capability_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let permissions = json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(permissions.contains(&"dialog:allow-open"));
+        assert!(!permissions.contains(&"dialog:default"));
+    }
+
     fn temp_test_dir() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

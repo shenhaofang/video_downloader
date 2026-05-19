@@ -70,6 +70,44 @@ describe("renderApp", () => {
     expect(input?.value).toBe("D:\\Videos\\bilibili");
   });
 
+  test("chooses an output directory for the next download", async () => {
+    const selectOutputDirectory = vi.fn().mockResolvedValue("E:\\Videos\\bilibili");
+    const createTask = vi.fn().mockResolvedValue({
+      ...createdCollectionFixture(),
+      group: {
+        ...createdCollectionFixture().group,
+        output_dir: "E:\\Videos\\bilibili",
+      },
+      tasks: [createdCollectionFixture().tasks[0]],
+    });
+    const runTask = vi.fn().mockResolvedValue({
+      ...createdCollectionFixture().tasks[0],
+      state: "completed",
+    });
+    renderApp(root, createInitialState(), { selectOutputDirectory, createTask, runTask });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='select-output-directory']")?.click();
+
+    await vi.waitFor(() => {
+      expect(selectOutputDirectory).toHaveBeenCalledWith("D:\\Videos\\bilibili");
+      expect(root.querySelector<HTMLInputElement>("[data-testid='output-directory']")?.value).toBe(
+        "E:\\Videos\\bilibili",
+      );
+    });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV1xx411c7mD";
+    root.querySelector<HTMLButtonElement>("[data-testid='add-task']")!.click();
+
+    await vi.waitFor(() => {
+      expect(createTask).toHaveBeenCalledWith({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD",
+        output_dir: "E:\\Videos\\bilibili",
+        has_login: false,
+      });
+    });
+  });
+
   test("renders login platform as a flat summary row", () => {
     renderApp(root, createInitialState());
     root.querySelector<HTMLButtonElement>("[data-tab='login']")?.click();
