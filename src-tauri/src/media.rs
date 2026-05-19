@@ -287,10 +287,11 @@ mod tests {
     }
 
     #[test]
-    fn tauri_config_uses_nsis_installer_hook_without_external_bins() {
+    fn tauri_config_bundles_media_tools_for_nsis_without_external_bins() {
         let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         let text = fs::read_to_string(config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let resources = json["bundle"]["resources"].as_array().unwrap();
 
         assert_eq!(json["bundle"]["externalBin"], serde_json::Value::Null);
         assert_eq!(json["bundle"]["targets"], serde_json::json!(["nsis"]));
@@ -298,10 +299,22 @@ mod tests {
             json["bundle"]["windows"]["nsis"]["installerHooks"],
             serde_json::json!("windows/hooks.nsh")
         );
-        assert!(json["bundle"]["resources"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!("resources/install-media-tools.ps1")));
+        assert!(resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
+        assert!(resources.contains(&serde_json::json!(
+            "resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip"
+        )));
+    }
+
+    #[test]
+    fn tauri_config_allows_nsis_install_directory_selection() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let text = fs::read_to_string(config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(
+            json["bundle"]["windows"]["nsis"]["installMode"],
+            serde_json::json!("both")
+        );
     }
 
     #[test]
@@ -326,26 +339,44 @@ mod tests {
     }
 
     #[test]
-    fn nsis_hook_downloads_media_tools_during_install_with_progress_ui() {
+    fn windows_release_entrypoint_uses_gui_subsystem() {
+        let main_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs");
+        let text = fs::read_to_string(main_path).unwrap();
+
+        assert!(text.contains("cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")"));
+    }
+
+    #[test]
+    fn nsis_hook_installs_bundled_media_tools_and_cleans_them_on_uninstall() {
         let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("windows")
             .join("hooks.nsh");
         let text = fs::read_to_string(hook_path).unwrap();
 
         assert!(text.contains("!macro NSIS_HOOK_POSTINSTALL"));
-        assert!(text.contains("NSISdl::download"));
+        assert!(!text.contains("NSISdl::download"));
+        assert!(!text.contains("-ArchiveUrl"));
         assert!(text.contains("SetDetailsView show"));
-        assert!(text.contains("DetailPrint \"Downloading FFmpeg media tools"));
+        assert!(text.contains("DetailPrint \"Installing bundled FFmpeg media tools"));
+        assert!(text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
         assert!(text.contains("install-media-tools.ps1"));
+        assert!(text.contains("!macro NSIS_HOOK_PREUNINSTALL"));
+        assert!(text.contains("RMDir /r \"$INSTDIR\\resources\\media-tools\""));
+        assert!(text.contains("DeleteRegKey SHCTX \"${MANUPRODUCTKEY}\""));
     }
 
     #[test]
-    fn dependency_install_script_verifies_checksum_before_extracting() {
+    fn dependency_install_script_verifies_bundled_archive_before_extracting() {
         let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
             .join("install-media-tools.ps1");
         let text = fs::read_to_string(script_path).unwrap();
 
+        assert!(!text.contains("ArchiveUrl"));
+        assert!(!text.contains("HttpClient"));
+        assert!(!text.contains("curl.exe"));
         assert!(text.contains("ExpectedSha256"));
         assert!(text.contains("Get-FileHash"));
         assert!(text.contains("Expand-Archive"));

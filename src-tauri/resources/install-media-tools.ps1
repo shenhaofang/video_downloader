@@ -10,16 +10,24 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
-if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
-  throw "Archive not found: $ArchivePath"
+function Write-InstallerLog {
+  param([Parameter(Mandatory = $true)][string]$Message)
+  Write-Output $Message
 }
 
+if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
+  throw "Bundled FFmpeg archive not found: $ArchivePath"
+}
+
+Write-InstallerLog "Verifying bundled FFmpeg archive"
 $actualHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
   throw "FFmpeg archive checksum mismatch. Expected $ExpectedSha256, got $actualHash"
 }
 
+Write-InstallerLog "Extracting bundled FFmpeg media tools"
 $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("video-downloader-ffmpeg-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
 
@@ -46,6 +54,8 @@ try {
 
   Get-ChildItem -LiteralPath $sourceRoot.FullName -Force |
     Copy-Item -Destination $InstallRoot -Recurse -Force
+
+  Write-InstallerLog "Bundled FFmpeg media tools installed"
 } finally {
   if (Test-Path -LiteralPath $extractRoot) {
     Remove-Item -LiteralPath $extractRoot -Recurse -Force

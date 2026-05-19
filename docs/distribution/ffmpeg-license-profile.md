@@ -1,6 +1,6 @@
 # FFmpeg License Profile
 
-This document records the distribution profile for installer-managed `ffmpeg` and `ffprobe` binaries.
+This document records the distribution profile for installer-bundled `ffmpeg` and `ffprobe` binaries.
 It is an engineering release gate, not legal advice.
 
 ## Default First-Release Profile
@@ -10,7 +10,7 @@ It is an engineering release gate, not legal advice.
 - The build must not use `--enable-nonfree`.
 - If the project later needs GPL-enabled codecs or libraries, that change must be reviewed as a separate release decision before the binary is installed by the app installer.
 - Nonfree FFmpeg builds are not distributable in this app.
-- The Windows installer uses `ffmpeg-n7.1.4-5-ged860ef7d9-win64-lgpl-shared-7.1.zip` from BtbN FFmpeg-Builds `autobuild-2026-05-18-18-09`, verified with SHA256 `d3c0d41c26b64bb42abbf9051a9494bc67185b6d9fa57798f20efb0e0213caf7`.
+- The Windows installer bundles `src-tauri/resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip`, copied from BtbN FFmpeg-Builds `autobuild-2026-05-18-18-09` asset `ffmpeg-n7.1.4-5-ged860ef7d9-win64-lgpl-shared-7.1.zip`, verified with SHA256 `d3c0d41c26b64bb42abbf9051a9494bc67185b6d9fa57798f20efb0e0213caf7`.
 
 ## Required Binary Record
 
@@ -29,7 +29,7 @@ For every installer-managed `ffmpeg` / `ffprobe` binary, keep this record with t
 ## Packaging Rule
 
 The app may support user-configured local tool paths during development and internal testing.
-Before a public installer downloads FFmpeg binaries, the release must attach a completed binary record for each target platform and verify that the installer URL, checksum, and extracted tool paths match the recorded build.
+Before a public installer bundles FFmpeg binaries, the release must attach a completed binary record for each target platform and verify that the bundled archive path, checksum, and extracted tool paths match the recorded build.
 
 ## References
 
