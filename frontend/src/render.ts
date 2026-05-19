@@ -353,6 +353,7 @@ function renderPagePreview(container: HTMLElement, state: AppState): void {
     "",
     preview.isLoading ? "探测中" : `已选 ${preview.selectedPages.size}/${preview.items.length}`,
   );
+  count.dataset.testid = "page-selection-count";
   header.append(title, count);
   panel.append(header);
 
@@ -462,7 +463,7 @@ function buildPagePreviewRow(
       selectedPages,
       error: null,
     };
-    renderPagePreview(container, state);
+    updatePagePreviewSelectionSummary(container, state);
   });
   label.append(
     checkbox,
@@ -471,6 +472,17 @@ function buildPagePreviewRow(
     element("span", "page-quality", item.quality ?? "自动"),
   );
   return label;
+}
+
+function updatePagePreviewSelectionSummary(container: HTMLElement, state: AppState): void {
+  const preview = state.pagePreview;
+  const count = container.querySelector<HTMLElement>("[data-testid='page-selection-count']");
+  if (count) {
+    count.textContent = `已选 ${preview.selectedPages.size}/${preview.items.length}`;
+  }
+  if (!preview.error) {
+    container.querySelector(".page-preview-error")?.remove();
+  }
 }
 
 function firstSelectedOrFirstPage(items: ProbePageItem[], selectedPages: Set<number>): number {

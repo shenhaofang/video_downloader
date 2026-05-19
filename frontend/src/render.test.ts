@@ -349,6 +349,36 @@ describe("renderApp", () => {
     });
   });
 
+  test("keeps multi-part preview scroll position when checking a page", async () => {
+    const probeBilibiliPages = vi.fn().mockResolvedValue({
+      groupTitle: "剑桥少儿英语PowerUp 2nd Edition",
+      usedLogin: false,
+      items: Array.from({ length: 80 }, (_, index) => {
+        const page = index + 1;
+        return {
+          page,
+          title: `分 P ${page}`,
+          quality: "720P",
+          requiresLogin: false,
+        };
+      }),
+    });
+    renderApp(root, createInitialState(), { probeBilibiliPages });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV17KxizLE17?p=58";
+    root.querySelector<HTMLButtonElement>("[data-testid='probe-pages']")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector<HTMLElement>(".page-preview-list")).not.toBeNull();
+    });
+    const list = root.querySelector<HTMLElement>(".page-preview-list")!;
+    list.scrollTop = 320;
+    root.querySelector<HTMLInputElement>("[data-testid='page-checkbox-40']")!.click();
+
+    expect(root.querySelector<HTMLElement>(".page-preview-list")?.scrollTop).toBe(320);
+  });
+
   test("polls persisted task groups while a task is running", async () => {
     const baseCollection = createdCollectionFixture();
     const createdCollection = {
