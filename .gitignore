@@ -1,5 +1,8 @@
 .worktrees/
+tasks/
 node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/resources/media-tools/
+src-tauri/resources/download-cache/

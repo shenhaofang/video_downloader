@@ -61,19 +61,58 @@ pub fn first_available_path(path: &Path) -> PathBuf {
     parent.join(format!("{stem} (10000).{ext}"))
 }
 
-pub fn expected_sidecar_names() -> [&'static str; 2] {
+pub fn expected_media_tool_names() -> [&'static str; 2] {
     ["ffmpeg", "ffprobe"]
 }
 
-pub fn sidecar_base_name(tool: &str) -> AppResult<&'static str> {
+pub fn media_tool_name(tool: &str) -> AppResult<&'static str> {
     match tool {
         "ffmpeg" => Ok("ffmpeg"),
         "ffprobe" => Ok("ffprobe"),
         _ => Err(AppError::structured(
             ErrorCode::EngineMissing,
-            "unknown bundled tool",
+            "unknown media tool",
         )),
     }
+}
+
+pub fn media_tool_path(configured_path: Option<PathBuf>, tool: &str) -> AppResult<Option<PathBuf>> {
+    let exe = std::env::current_exe()
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    media_tool_path_from_exe(configured_path, tool, &exe)
+}
+
+pub fn media_tool_path_from_exe(
+    configured_path: Option<PathBuf>,
+    tool: &str,
+    exe_path: &Path,
+) -> AppResult<Option<PathBuf>> {
+    if let Some(path) = configured_path {
+        return Ok(Some(path));
+    }
+
+    let path = installer_managed_media_tool_path_from_exe(exe_path, tool)?;
+    Ok(path.is_file().then_some(path))
+}
+
+pub fn installer_managed_media_tool_path_from_exe(
+    exe_path: &Path,
+    tool: &str,
+) -> AppResult<PathBuf> {
+    let name = media_tool_name(tool)?;
+    let exe_dir = exe_path.parent().ok_or_else(|| {
+        AppError::structured(
+            ErrorCode::FilesystemError,
+            "runtime executable has no parent directory",
+        )
+    })?;
+
+    Ok(exe_dir
+        .join("resources")
+        .join("media-tools")
+        .join("ffmpeg")
+        .join("bin")
+        .join(format!("{name}.exe")))
 }
 
 pub fn merge_with_ffmpeg(
@@ -175,18 +214,122 @@ mod tests {
     }
 
     #[test]
-    fn expected_sidecar_names_include_ffmpeg_and_ffprobe() {
-        assert_eq!(expected_sidecar_names(), ["ffmpeg", "ffprobe"]);
+    fn expected_media_tool_names_include_ffmpeg_and_ffprobe() {
+        assert_eq!(expected_media_tool_names(), ["ffmpeg", "ffprobe"]);
     }
 
     #[test]
-    fn accepts_only_bundled_media_tools() {
-        assert_eq!(sidecar_base_name("ffmpeg").unwrap(), "ffmpeg");
-        assert_eq!(sidecar_base_name("ffprobe").unwrap(), "ffprobe");
+    fn accepts_only_installer_managed_media_tools() {
+        assert_eq!(media_tool_name("ffmpeg").unwrap(), "ffmpeg");
+        assert_eq!(media_tool_name("ffprobe").unwrap(), "ffprobe");
         assert_eq!(
-            sidecar_base_name("yt-dlp").unwrap_err().code(),
+            media_tool_name("yt-dlp").unwrap_err().code(),
             ErrorCode::EngineMissing
         );
+    }
+
+    #[test]
+    fn builds_installer_managed_media_tool_path_next_to_app_resources() {
+        let path = installer_managed_media_tool_path_from_exe(
+            Path::new("C:\\Users\\me\\AppData\\Local\\Video Downloader\\video-downloader.exe"),
+            "ffmpeg",
+        )
+        .unwrap();
+
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "C:\\Users\\me\\AppData\\Local\\Video Downloader\\resources\\media-tools\\ffmpeg\\bin\\ffmpeg.exe"
+            )
+        );
+    }
+
+    #[test]
+    fn media_tool_path_uses_configured_path_before_installer_managed_path() {
+        let configured = PathBuf::from("D:\\tools\\ffmpeg.exe");
+        let path = media_tool_path_from_exe(
+            Some(configured.clone()),
+            "ffmpeg",
+            Path::new("C:\\app\\video-downloader.exe"),
+        )
+        .unwrap();
+
+        assert_eq!(path, Some(configured));
+    }
+
+    #[test]
+    fn media_tool_path_uses_installer_managed_path_when_present() {
+        let dir = temp_test_dir();
+        let exe_dir = dir.join("app");
+        let ffmpeg = exe_dir
+            .join("resources")
+            .join("media-tools")
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffmpeg.exe");
+        fs::create_dir_all(ffmpeg.parent().unwrap()).unwrap();
+        fs::write(&ffmpeg, b"test binary").unwrap();
+
+        let path = media_tool_path_from_exe(None, "ffmpeg", &exe_dir.join("video-downloader.exe"))
+            .unwrap();
+
+        assert_eq!(path, Some(ffmpeg));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn media_tool_path_is_none_when_installer_managed_tool_is_missing() {
+        let path =
+            media_tool_path_from_exe(None, "ffprobe", Path::new("C:\\app\\video-downloader.exe"))
+                .unwrap();
+
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn tauri_config_uses_nsis_installer_hook_without_external_bins() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let text = fs::read_to_string(config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(json["bundle"]["externalBin"], serde_json::Value::Null);
+        assert_eq!(json["bundle"]["targets"], serde_json::json!(["nsis"]));
+        assert_eq!(
+            json["bundle"]["windows"]["nsis"]["installerHooks"],
+            serde_json::json!("windows/hooks.nsh")
+        );
+        assert!(json["bundle"]["resources"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("resources/install-media-tools.ps1")));
+    }
+
+    #[test]
+    fn nsis_hook_downloads_media_tools_during_install_with_progress_ui() {
+        let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("windows")
+            .join("hooks.nsh");
+        let text = fs::read_to_string(hook_path).unwrap();
+
+        assert!(text.contains("!macro NSIS_HOOK_POSTINSTALL"));
+        assert!(text.contains("NSISdl::download"));
+        assert!(text.contains("SetDetailsView show"));
+        assert!(text.contains("DetailPrint \"Downloading FFmpeg media tools"));
+        assert!(text.contains("install-media-tools.ps1"));
+    }
+
+    #[test]
+    fn dependency_install_script_verifies_checksum_before_extracting() {
+        let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("install-media-tools.ps1");
+        let text = fs::read_to_string(script_path).unwrap();
+
+        assert!(text.contains("ExpectedSha256"));
+        assert!(text.contains("Get-FileHash"));
+        assert!(text.contains("Expand-Archive"));
+        assert!(text.contains("ffmpeg.exe"));
+        assert!(text.contains("ffprobe.exe"));
     }
 
     #[test]
@@ -226,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn capability_allows_only_bundled_media_sidecars() {
+    fn capability_does_not_allow_shell_sidecar_execution() {
         let capability_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("capabilities")
             .join("default.json");
@@ -245,23 +388,8 @@ mod tests {
                         .is_some_and(|identifier| identifier.starts_with("shell:"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(shell_permissions.len(), 1);
-        let shell_permission = permissions
-            .iter()
-            .find(|entry| entry["identifier"] == "shell:allow-execute")
-            .expect("missing constrained shell execute permission");
-        let allowed = shell_permission["allow"].as_array().unwrap();
-        let names = allowed
-            .iter()
-            .map(|entry| {
-                assert_eq!(entry["sidecar"], true);
-                assert!(entry.get("cmd").is_none());
-                assert_eq!(entry["args"], false);
-                entry["name"].as_str().unwrap()
-            })
-            .collect::<Vec<_>>();
 
-        assert_eq!(names, vec!["binaries/ffmpeg", "binaries/ffprobe"]);
+        assert!(shell_permissions.is_empty());
     }
 
     fn temp_test_dir() -> PathBuf {

@@ -181,9 +181,11 @@ async fn run_task_from_state(
     match task.engine {
         DownloadEngine::Native => {
             let config = state.storage.load_config().await?;
-            let downloader = NativeBilibiliDownloader::with_ffmpeg_path(
+            let ffmpeg_path = crate::media::media_tool_path(
                 config.ffmpeg_path.map(std::path::PathBuf::from),
-            );
+                "ffmpeg",
+            )?;
+            let downloader = NativeBilibiliDownloader::with_ffmpeg_path(ffmpeg_path);
             run_task_with_downloader_from_state(state, input, &downloader).await
         }
         DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
@@ -289,6 +291,18 @@ async fn get_tool_status_from_state(state: &AppState) -> AppResult<ToolStatus> {
 }
 
 fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
+    tool_status_from_config_with_installed_media(config, |tool| {
+        crate::media::media_tool_path(None, tool).ok().flatten()
+    })
+}
+
+fn tool_status_from_config_with_installed_media<F>(
+    config: &AppConfig,
+    installed_path: F,
+) -> ToolStatus
+where
+    F: Fn(&str) -> Option<std::path::PathBuf>,
+{
     let ytdlp = match detect_ytdlp(config.ytdlp_path.as_deref()) {
         YtDlpStatus::Available { .. } => "available",
         YtDlpStatus::Missing => "missing",
@@ -296,13 +310,27 @@ fn tool_status_from_config(config: &AppConfig) -> ToolStatus {
 
     ToolStatus {
         ytdlp: ytdlp.into(),
-        ffmpeg: configured_tool_status(config.ffmpeg_path.as_deref()).into(),
-        ffprobe: configured_tool_status(config.ffprobe_path.as_deref()).into(),
+        ffmpeg: media_tool_status(config.ffmpeg_path.as_deref(), installed_path("ffmpeg")).into(),
+        ffprobe: media_tool_status(config.ffprobe_path.as_deref(), installed_path("ffprobe"))
+            .into(),
     }
 }
 
 fn configured_tool_status(path: Option<&str>) -> &'static str {
     path.filter(|value| std::path::Path::new(value).is_file())
+        .map(|_| "available")
+        .unwrap_or("missing")
+}
+
+fn media_tool_status(
+    configured_path: Option<&str>,
+    installed_path: Option<std::path::PathBuf>,
+) -> &'static str {
+    if configured_tool_status(configured_path) == "available" {
+        return "available";
+    }
+    installed_path
+        .filter(|value| value.is_file())
         .map(|_| "available")
         .unwrap_or("missing")
 }
@@ -827,6 +855,34 @@ mod tests {
 
         let status = tool_status_from_config(&config);
 
+        assert_eq!(status.ffmpeg, "available");
+        assert_eq!(status.ffprobe, "available");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tool_status_uses_installer_managed_media_tools_when_config_paths_are_empty() {
+        let dir = std::env::temp_dir().join(format!(
+            "vd-installed-media-tool-status-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let ffmpeg = dir.join("ffmpeg.exe");
+        let ffprobe = dir.join("ffprobe.exe");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&ffmpeg, b"test binary").unwrap();
+        fs::write(&ffprobe, b"test binary").unwrap();
+
+        let status =
+            tool_status_from_config_with_installed_media(
+                &AppConfig::default(),
+                |tool| match tool {
+                    "ffmpeg" => Some(ffmpeg.clone()),
+                    "ffprobe" => Some(ffprobe.clone()),
+                    _ => None,
+                },
+            );
+
+        assert_eq!(status.ytdlp, "missing");
         assert_eq!(status.ffmpeg, "available");
         assert_eq!(status.ffprobe, "available");
         fs::remove_dir_all(dir).unwrap();

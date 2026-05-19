@@ -37,7 +37,7 @@
 - [x] Native engine returns `unsupported_content` for unsupported links.
 - [x] Missing `yt-dlp` reports `engine_missing`.
 - [x] `yt-dlp` adapter can execute a configured local binary.
-- [x] Bundled `ffmpeg` and `ffprobe` status is visible.
+- [x] Installer-managed `ffmpeg` and `ffprobe` status is visible.
 - [x] FFmpeg license profile is recorded before public distribution.
 
 ## Login
@@ -50,7 +50,7 @@
 ## Known Gaps
 
 - The real frontend exposes QR-code login controls, renders a scannable QR image, and automatically polls login status after QR generation.
-- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured `ffmpeg` / `ffprobe` paths can be stored from Settings and shown in the UI, and the frontend calls the backend `run_task` command after task creation with configured concurrency. The desktop runtime still lacks bundled binaries, backend event streaming, and durable backend scheduling across app restarts.
+- Native media download now has a tested core path from playurl fetch through stream download and `ffmpeg` merge, a storage-backed single-task executor can persist progress/results, configured or installer-managed `ffmpeg` / `ffprobe` paths can be detected from Settings and shown in the UI, and the frontend calls the backend `run_task` command after task creation with configured concurrency. The desktop runtime still lacks backend event streaming and durable backend scheduling across app restarts.
 - `create_task` uses real native bilibili probe by default and persists created records; the frontend triggers `run_task`, reloads persisted history on startup, and polls persisted task groups while a task is running so visible progress is not stale.
 - Startup login verification now checks stored bilibili cookies during the existing login status load, clears confirmed-invalid cookies, and preserves sessions as `待验证` when the network is unavailable.
-- Bundled `ffmpeg` / `ffprobe` binaries and `externalBin` entries are not configured for distribution; `externalBin` must wait until target-triple binaries are present because Tauri validates them during build. The license profile is recorded in `docs/distribution/ffmpeg-license-profile.md`.
+- `ffmpeg` / `ffprobe` are installer-managed on Windows: the NSIS installer downloads a pinned LGPL FFmpeg build during installation, verifies SHA256, and extracts the tools under app resources before install completion. The license profile is recorded in `docs/distribution/ffmpeg-license-profile.md`.
