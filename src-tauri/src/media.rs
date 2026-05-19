@@ -305,6 +305,27 @@ mod tests {
     }
 
     #[test]
+    fn tauri_identifier_does_not_end_with_app_extension() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let text = fs::read_to_string(config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let identifier = json["identifier"].as_str().unwrap();
+
+        assert!(!identifier.ends_with(".app"));
+    }
+
+    #[test]
+    fn cargo_lib_name_does_not_collide_with_bin_target_pdb_name() {
+        let cargo_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let text = fs::read_to_string(cargo_path).unwrap();
+        let package_name = extract_toml_string(&text, "package", "name").unwrap();
+        let lib_name = extract_toml_string(&text, "lib", "name").unwrap();
+        let normalized_package_name = package_name.replace('-', "_");
+
+        assert_ne!(lib_name, normalized_package_name);
+    }
+
+    #[test]
     fn nsis_hook_downloads_media_tools_during_install_with_progress_ui() {
         let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("windows")
@@ -401,5 +422,26 @@ mod tests {
             "video-downloader-media-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    fn extract_toml_string(text: &str, section: &str, key: &str) -> Option<String> {
+        let mut in_section = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                in_section = trimmed == format!("[{section}]");
+                continue;
+            }
+            if !in_section {
+                continue;
+            }
+            let Some((name, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if name.trim() == key {
+                return Some(value.trim().trim_matches('"').to_string());
+            }
+        }
+        None
     }
 }

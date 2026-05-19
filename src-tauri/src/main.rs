@@ -1,3 +1,3 @@
 fn main() {
-    video_downloader::run();
+    video_downloader_app::run();
 }
