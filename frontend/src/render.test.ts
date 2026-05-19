@@ -238,6 +238,117 @@ describe("renderApp", () => {
     });
   });
 
+  test("probes multi-part pages and creates selected range", async () => {
+    const createdCollection = createdCollectionFixture();
+    const createTask = vi.fn().mockResolvedValue({
+      ...createdCollection,
+      tasks: [createdCollection.tasks[0]],
+    });
+    const probeBilibiliPages = vi.fn().mockResolvedValue({
+      groupTitle: "剑桥少儿英语PowerUp 2nd Edition",
+      usedLogin: false,
+      items: [
+        {
+          page: 58,
+          title: "字幕版_PU2E_L0_Chant 1 Page 5_video",
+          quality: "720P",
+          requiresLogin: false,
+        },
+        {
+          page: 59,
+          title: "字幕版_PU2E_L0_Chant 2 Page 6_video",
+          quality: "720P",
+          requiresLogin: false,
+        },
+        {
+          page: 60,
+          title: "字幕版_PU2E_L0_Chant 3 Page 7_video",
+          quality: "720P",
+          requiresLogin: false,
+        },
+      ],
+    });
+    const runTask = vi.fn().mockResolvedValue({
+      ...createdCollection.tasks[0],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    renderApp(root, createInitialState(), { createTask, probeBilibiliPages, runTask });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV17KxizLE17?p=58";
+    root.querySelector<HTMLButtonElement>("[data-testid='probe-pages']")!.click();
+
+    await vi.waitFor(() => {
+      expect(probeBilibiliPages).toHaveBeenCalledWith({
+        url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+        has_login: false,
+      });
+      expect(root.textContent).toContain("剑桥少儿英语PowerUp 2nd Edition");
+      expect(root.textContent).toContain("58");
+      expect(root.textContent).toContain("60");
+    });
+
+    root.querySelector<HTMLInputElement>("[data-testid='page-range-start']")!.value = "58";
+    root.querySelector<HTMLInputElement>("[data-testid='page-range-end']")!.value = "59";
+    root.querySelector<HTMLButtonElement>("[data-testid='apply-page-range']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='add-task']")!.click();
+
+    await vi.waitFor(() => {
+      expect(createTask).toHaveBeenCalledWith({
+        url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+        output_dir: "D:\\Videos\\bilibili",
+        has_login: false,
+        selected_pages: [58, 59],
+      });
+    });
+  });
+
+  test("creates checked multi-part pages from preview", async () => {
+    const createdCollection = createdCollectionFixture();
+    const createTask = vi.fn().mockResolvedValue({
+      ...createdCollection,
+      tasks: [createdCollection.tasks[0]],
+    });
+    const probeBilibiliPages = vi.fn().mockResolvedValue({
+      groupTitle: "剑桥少儿英语PowerUp 2nd Edition",
+      usedLogin: false,
+      items: [58, 59, 60].map((page) => ({
+        page,
+        title: `分 P ${page}`,
+        quality: "720P",
+        requiresLogin: false,
+      })),
+    });
+    const runTask = vi.fn().mockResolvedValue({
+      ...createdCollection.tasks[0],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    renderApp(root, createInitialState(), { createTask, probeBilibiliPages, runTask });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV17KxizLE17?p=58";
+    root.querySelector<HTMLButtonElement>("[data-testid='probe-pages']")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector<HTMLInputElement>("[data-testid='page-checkbox-59']")).not.toBeNull();
+    });
+    root.querySelector<HTMLInputElement>("[data-testid='page-checkbox-59']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='add-task']")!.click();
+
+    await vi.waitFor(() => {
+      expect(createTask).toHaveBeenCalledWith({
+        url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+        output_dir: "D:\\Videos\\bilibili",
+        has_login: false,
+        selected_pages: [58, 60],
+      });
+    });
+  });
+
   test("polls persisted task groups while a task is running", async () => {
     const baseCollection = createdCollectionFixture();
     const createdCollection = {

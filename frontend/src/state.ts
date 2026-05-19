@@ -51,6 +51,22 @@ export interface CreatedTaskGroup {
   tasks: DownloadTask[];
 }
 
+export interface ProbePageItem {
+  page: number;
+  title: string;
+  quality: string | null;
+  requiresLogin: boolean;
+}
+
+export interface PagePreviewState {
+  url: string | null;
+  groupTitle: string | null;
+  items: ProbePageItem[];
+  selectedPages: Set<number>;
+  isLoading: boolean;
+  error: string | null;
+}
+
 export interface BilibiliLoginState {
   qrcodeKey: string | null;
   url: string | null;
@@ -73,6 +89,7 @@ export interface AppState {
   platforms: PlatformLoginRow[];
   expandedPlatforms: Set<string>;
   taskGroups: CreatedTaskGroup[];
+  pagePreview: PagePreviewState;
   bilibiliLogin: BilibiliLoginState;
   toolStatus: ToolStatus;
 }
@@ -91,6 +108,7 @@ export function createInitialState(): AppState {
     platforms: [{ platform: "bilibili", status: "未登录" }],
     expandedPlatforms: new Set<string>(),
     taskGroups: [],
+    pagePreview: emptyPagePreviewState(),
     bilibiliLogin: {
       qrcodeKey: null,
       url: null,
@@ -105,6 +123,17 @@ export function createInitialState(): AppState {
       ffmpeg: "missing",
       ffprobe: "missing",
     },
+  };
+}
+
+export function emptyPagePreviewState(): PagePreviewState {
+  return {
+    url: null,
+    groupTitle: null,
+    items: [],
+    selectedPages: new Set<number>(),
+    isLoading: false,
+    error: null,
   };
 }
 

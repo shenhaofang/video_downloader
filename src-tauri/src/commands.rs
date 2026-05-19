@@ -7,7 +7,7 @@ use crate::errors::AppResult;
 use crate::models::{AppConfig, DownloadEngine};
 use crate::platform::bilibili::native::NativeBilibiliDownloader;
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
-use crate::platform::PlatformDownloader;
+use crate::platform::{PlatformDownloader, ProbeInput, ProbeResult};
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -17,6 +17,13 @@ use uuid::Uuid;
 pub struct CreateTaskCommand {
     pub url: String,
     pub output_dir: String,
+    pub has_login: bool,
+    pub selected_pages: Option<Vec<u32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeTaskCommand {
+    pub url: String,
     pub has_login: bool,
 }
 
@@ -62,6 +69,14 @@ pub async fn create_task(
     input: CreateTaskCommand,
 ) -> AppResult<CreatedTaskGroup> {
     create_task_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
+pub async fn probe_bilibili_pages(
+    state: tauri::State<'_, AppState>,
+    input: ProbeTaskCommand,
+) -> AppResult<ProbeResult> {
+    probe_bilibili_pages_from_state(state.inner(), input).await
 }
 
 #[tauri::command]
@@ -151,6 +166,7 @@ async fn create_task_with_downloader_from_state(
             output_dir: input.output_dir,
             engine,
             has_login,
+            selected_pages: input.selected_pages,
         },
     )
     .await?;
@@ -160,6 +176,29 @@ async fn create_task_with_downloader_from_state(
     }
 
     Ok(result)
+}
+
+async fn probe_bilibili_pages_from_state(
+    state: &AppState,
+    input: ProbeTaskCommand,
+) -> AppResult<ProbeResult> {
+    let downloader = NativeBilibiliDownloader::default();
+    probe_bilibili_pages_with_downloader_from_state(state, input, &downloader).await
+}
+
+async fn probe_bilibili_pages_with_downloader_from_state(
+    state: &AppState,
+    input: ProbeTaskCommand,
+    downloader: &dyn PlatformDownloader,
+) -> AppResult<ProbeResult> {
+    let has_login = input.has_login || state.bilibili_auth.load_cookie_string()?.is_some();
+    downloader
+        .probe(ProbeInput {
+            url: input.url,
+            engine: DownloadEngine::Native,
+            has_login,
+        })
+        .await
 }
 
 async fn list_task_groups_from_state(state: &AppState) -> AppResult<Vec<CreatedTaskGroup>> {
@@ -361,6 +400,7 @@ mod tests {
                 url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                 output_dir: "D:\\Videos".into(),
                 has_login: true,
+                selected_pages: None,
             },
             DownloadEngine::Native,
             &MockDownloader,
@@ -391,6 +431,7 @@ mod tests {
                 url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                 output_dir: "D:\\Videos".into(),
                 has_login: false,
+                selected_pages: None,
             },
             DownloadEngine::Native,
             &RecordingDownloader,
@@ -429,12 +470,36 @@ mod tests {
                 url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                 output_dir: "D:\\Videos".into(),
                 has_login: false,
+                selected_pages: None,
             },
         )
         .await
         .unwrap_err();
 
         assert_eq!(err.code(), crate::errors::ErrorCode::EngineMissing);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn probe_bilibili_pages_from_state_returns_items_without_persisting_tasks() {
+        let state = command_test_state().await;
+
+        let result = probe_bilibili_pages_with_downloader_from_state(
+            &state,
+            ProbeTaskCommand {
+                url: "https://www.bilibili.com/video/BV17KxizLE17?p=58".into(),
+                has_login: false,
+            },
+            &MultiPageProbeDownloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.group_title, "剑桥少儿英语PowerUp 2nd Edition");
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.items[0].metadata.as_ref().unwrap().page, 58);
+        assert_eq!(result.items[1].metadata.as_ref().unwrap().page, 59);
+        assert!(state.storage.load_task_groups().await.unwrap().is_empty());
         cleanup_state(state).await;
     }
 
@@ -447,6 +512,7 @@ mod tests {
                 url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                 output_dir: "D:\\Videos".into(),
                 has_login: false,
+                selected_pages: None,
             },
             DownloadEngine::Native,
             &RecordingDownloader,
@@ -487,6 +553,7 @@ mod tests {
                 url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                 output_dir: "D:\\Videos".into(),
                 has_login: false,
+                selected_pages: None,
             },
             DownloadEngine::Native,
             &RecordingDownloader,
@@ -520,6 +587,7 @@ mod tests {
                 url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                 output_dir: "D:\\Videos".into(),
                 has_login: false,
+                selected_pages: None,
             },
             DownloadEngine::Native,
             &RecordingDownloader,
@@ -948,6 +1016,45 @@ mod tests {
             _sink: &'a dyn EventSink,
         ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
             Box::pin(async { unreachable!("command create tests do not download") })
+        }
+    }
+
+    struct MultiPageProbeDownloader;
+
+    impl PlatformDownloader for MultiPageProbeDownloader {
+        fn probe<'a>(
+            &'a self,
+            input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(ProbeResult {
+                    group_title: "剑桥少儿英语PowerUp 2nd Edition".into(),
+                    used_login: input.has_login,
+                    items: [58, 59]
+                        .into_iter()
+                        .map(|page| DownloadItem {
+                            title: format!("字幕版_PU2E_L0_Chant {page}"),
+                            output_file: format!("{page}.mp4"),
+                            quality: Some("720P".into()),
+                            requires_login: input.has_login,
+                            bytes_total: None,
+                            metadata: Some(DownloadItemMetadata {
+                                bvid: "BV17KxizLE17".into(),
+                                cid: page as u64,
+                                page,
+                            }),
+                        })
+                        .collect(),
+                })
+            })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _input: DownloadInput,
+            _sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async { unreachable!("probe tests do not download") })
         }
     }
 

@@ -5,6 +5,7 @@ import {
   type CreatedTaskGroup,
   type Engine,
   type PlatformLoginRow,
+  type ProbePageItem,
 } from "./state";
 
 interface TauriConfig {
@@ -20,10 +21,38 @@ interface CreateTaskInput {
   url: string;
   output_dir: string;
   has_login: boolean;
+  selected_pages?: number[] | null;
 }
 
 interface RunTaskInput {
   task_id: string;
+}
+
+interface ProbePagesInput {
+  url: string;
+  has_login: boolean;
+}
+
+interface TauriProbeResult {
+  group_title: string;
+  items: TauriProbeItem[];
+  used_login: boolean;
+}
+
+interface TauriProbeItem {
+  title: string;
+  output_file: string;
+  quality?: string | null;
+  requires_login: boolean;
+  metadata?: {
+    page: number;
+  } | null;
+}
+
+export interface ProbePagesResult {
+  groupTitle: string;
+  items: ProbePageItem[];
+  usedLogin: boolean;
 }
 
 export interface LoginQr {
@@ -77,6 +106,18 @@ export async function createTask(input: CreateTaskInput): Promise<CreatedTaskGro
   } catch (error) {
     if (isTauriUnavailable(error)) {
       return fallbackTaskGroup(input.output_dir);
+    }
+    throw error;
+  }
+}
+
+export async function probeBilibiliPages(input: ProbePagesInput): Promise<ProbePagesResult> {
+  try {
+    const result = await invoke<TauriProbeResult>("probe_bilibili_pages", { input });
+    return normalizeProbePagesResult(result);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return fallbackProbePagesResult();
     }
     throw error;
   }
@@ -232,6 +273,19 @@ function fallbackTaskGroup(outputDir: string): CreatedTaskGroup {
   };
 }
 
+function fallbackProbePagesResult(): ProbePagesResult {
+  return {
+    groupTitle: "剑桥少儿英语PowerUp 2nd Edition",
+    usedLogin: false,
+    items: [58, 59, 60].map((page) => ({
+      page,
+      title: `分 P ${page}`,
+      quality: "720P",
+      requiresLogin: false,
+    })),
+  };
+}
+
 function fallbackTask(id: string, title: string, outputFile: string, progress: number) {
   return {
     id,
@@ -259,6 +313,19 @@ function normalizeCreatedTaskGroup(result: CreatedTaskGroup): CreatedTaskGroup {
   return {
     group: result.group,
     tasks: result.tasks.map(normalizeTask),
+  };
+}
+
+function normalizeProbePagesResult(result: TauriProbeResult): ProbePagesResult {
+  return {
+    groupTitle: result.group_title,
+    usedLogin: result.used_login,
+    items: result.items.map((item, index) => ({
+      page: item.metadata?.page ?? index + 1,
+      title: item.title,
+      quality: item.quality ?? null,
+      requiresLogin: item.requires_login,
+    })),
   };
 }
 

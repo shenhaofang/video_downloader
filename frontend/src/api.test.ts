@@ -6,6 +6,7 @@ import {
   getToolStatus,
   listTaskGroups,
   pollBilibiliLogin,
+  probeBilibiliPages,
   runTask,
   saveConfig,
   startBilibiliLogin,
@@ -73,6 +74,80 @@ describe("api fallback detection", () => {
       engine: "yt-dlp",
     });
     expect(invokeMock).toHaveBeenCalledWith("run_task", { input: { task_id: "task-1" } });
+  });
+
+  test("creates task with selected pages when provided", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      group: {
+        id: "group-1",
+        title: "剑桥少儿英语PowerUp 2nd Edition",
+        output_dir: "D:\\Videos\\bilibili",
+        state: "queued",
+      },
+      tasks: [],
+    });
+
+    await createTask({
+      url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+      output_dir: "D:\\Videos\\bilibili",
+      has_login: false,
+      selected_pages: [58, 59],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("create_task", {
+      input: {
+        url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+        output_dir: "D:\\Videos\\bilibili",
+        has_login: false,
+        selected_pages: [58, 59],
+      },
+    });
+  });
+
+  test("probes bilibili pages and maps metadata page numbers", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      group_title: "剑桥少儿英语PowerUp 2nd Edition",
+      used_login: false,
+      items: [
+        {
+          title: "字幕版_PU2E_L0_Chant 1 Page 5_video",
+          output_file: "58.mp4",
+          quality: "720P",
+          requires_login: false,
+          metadata: {
+            bvid: "BV17KxizLE17",
+            cid: 58,
+            page: 58,
+          },
+        },
+      ],
+    });
+
+    await expect(
+      probeBilibiliPages({
+        url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+        has_login: false,
+      }),
+    ).resolves.toEqual({
+      groupTitle: "剑桥少儿英语PowerUp 2nd Edition",
+      usedLogin: false,
+      items: [
+        {
+          title: "字幕版_PU2E_L0_Chant 1 Page 5_video",
+          page: 58,
+          quality: "720P",
+          requiresLogin: false,
+        },
+      ],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("probe_bilibili_pages", {
+      input: {
+        url: "https://www.bilibili.com/video/BV17KxizLE17?p=58",
+        has_login: false,
+      },
+    });
   });
 
   test("saves config through Tauri command using snake case payload", async () => {

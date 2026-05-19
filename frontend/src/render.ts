@@ -4,6 +4,7 @@ import {
   getToolStatus as defaultGetToolStatus,
   listTaskGroups as defaultListTaskGroups,
   pollBilibiliLogin as defaultPollBilibiliLogin,
+  probeBilibiliPages as defaultProbeBilibiliPages,
   runTask as defaultRunTask,
   saveConfig as defaultSaveConfig,
   startBilibiliLogin as defaultStartBilibiliLogin,
@@ -11,11 +12,13 @@ import {
 import {
   platformRowText,
   taskOutputDirectory,
+  emptyPagePreviewState,
   type AppSettings,
   type AppState,
   type CreatedTaskGroup,
   type DownloadTask,
   type Engine,
+  type ProbePageItem,
   type TabId,
 } from "./state";
 import { createQrDataUrl as defaultCreateQrDataUrl } from "./qr";
@@ -26,6 +29,7 @@ export interface RenderDependencies {
   saveConfig?: typeof defaultSaveConfig;
   startBilibiliLogin?: typeof defaultStartBilibiliLogin;
   pollBilibiliLogin?: typeof defaultPollBilibiliLogin;
+  probeBilibiliPages?: typeof defaultProbeBilibiliPages;
   clearBilibiliLogin?: typeof defaultClearBilibiliLogin;
   getToolStatus?: typeof defaultGetToolStatus;
   listTaskGroups?: typeof defaultListTaskGroups;
@@ -44,6 +48,7 @@ export function renderApp(
   const saveConfig = dependencies.saveConfig ?? defaultSaveConfig;
   const startBilibiliLogin = dependencies.startBilibiliLogin ?? defaultStartBilibiliLogin;
   const pollBilibiliLogin = dependencies.pollBilibiliLogin ?? defaultPollBilibiliLogin;
+  const probeBilibiliPages = dependencies.probeBilibiliPages ?? defaultProbeBilibiliPages;
   const clearBilibiliLogin = dependencies.clearBilibiliLogin ?? defaultClearBilibiliLogin;
   const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
   const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
@@ -57,6 +62,7 @@ export function renderApp(
       saveConfig,
       startBilibiliLogin,
       pollBilibiliLogin,
+      probeBilibiliPages,
       clearBilibiliLogin,
       getToolStatus,
       listTaskGroups,
@@ -123,30 +129,97 @@ function buildDownloadsPanel(
   title.append(element("h1", "", "下载任务"));
 
   const form = element("form", "download-toolbar");
-  form.append(
-    field("视频链接", "video-url", "请输入 bilibili 视频或合集链接"),
-    outputDirectoryField(state),
-  );
+  form.append(field("视频链接", "video-url", "请输入 bilibili 视频或合集链接"));
+  form.append(outputDirectoryField(state));
+
+  const actions = element("div", "download-actions");
+  const probeButton = element("button", "secondary", "探测选集");
+  probeButton.type = "button";
+  probeButton.dataset.testid = "probe-pages";
 
   const addButton = element("button", "primary", "添加下载");
   addButton.type = "submit";
   addButton.dataset.testid = "add-task";
-  form.append(addButton);
+  actions.append(probeButton, addButton);
+  form.append(actions);
+
+  const pagePreview = element("div", "page-preview-host");
+  renderPagePreview(pagePreview, state);
+  const taskList = element("div", "task-list");
+  renderTaskList(taskList, state);
+
+  probeButton.addEventListener("click", async () => {
+    const url = readInput(form, "video-url");
+    if (!url) {
+      state.pagePreview = {
+        ...emptyPagePreviewState(),
+        error: "请输入视频链接",
+      };
+      renderPagePreview(pagePreview, state);
+      return;
+    }
+
+    state.pagePreview = {
+      ...state.pagePreview,
+      url,
+      isLoading: true,
+      error: null,
+    };
+    renderPagePreview(pagePreview, state);
+
+    try {
+      const result = await dependencies.probeBilibiliPages({ url, has_login: false });
+      state.pagePreview = {
+        url,
+        groupTitle: result.groupTitle,
+        items: result.items,
+        selectedPages: new Set(result.items.map((item) => item.page)),
+        isLoading: false,
+        error: null,
+      };
+    } catch (error) {
+      state.pagePreview = {
+        ...state.pagePreview,
+        isLoading: false,
+        error: errorMessage(error),
+      };
+    }
+    renderPagePreview(pagePreview, state);
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const url = form.querySelector<HTMLInputElement>("[data-testid='video-url']")?.value.trim() ?? "";
     const outputDir =
       form.querySelector<HTMLInputElement>("[data-testid='output-directory']")?.value ??
       taskOutputDirectory(state.settings.downloadRoot);
-    const created = await dependencies.createTask({ url, output_dir: outputDir, has_login: false });
+    const selectedPages = selectedPagesForUrl(state, url);
+    if (selectedPages?.length === 0) {
+      state.pagePreview = {
+        ...state.pagePreview,
+        error: "至少选择一个分 P",
+      };
+      renderPagePreview(pagePreview, state);
+      return;
+    }
+
+    const createInput = {
+      url,
+      output_dir: outputDir,
+      has_login: false,
+      ...(selectedPages ? { selected_pages: selectedPages } : {}),
+    };
+    const created = await dependencies.createTask(createInput);
     state.taskGroups.unshift(created);
+    if (state.pagePreview.url === url) {
+      state.pagePreview = emptyPagePreviewState();
+      renderPagePreview(pagePreview, state);
+    }
     renderTaskList(taskList, state);
     await runTasksWithConcurrency(state, taskList, created.tasks, dependencies);
   });
 
-  const taskList = element("div", "task-list");
-  renderTaskList(taskList, state);
-  panel.append(title, form, taskList);
+  panel.append(title, form, pagePreview, taskList);
   return panel;
 }
 
@@ -252,6 +325,161 @@ function outputDirectoryField(state: AppState): HTMLElement {
   button.type = "button";
   label.append(input, button);
   return label;
+}
+
+function selectedPagesForUrl(state: AppState, url: string): number[] | null {
+  const preview = state.pagePreview;
+  if (preview.url !== url || preview.items.length === 0) {
+    return null;
+  }
+
+  return preview.items
+    .filter((item) => preview.selectedPages.has(item.page))
+    .map((item) => item.page);
+}
+
+function renderPagePreview(container: HTMLElement, state: AppState): void {
+  const preview = state.pagePreview;
+  if (!preview.isLoading && !preview.error && preview.items.length === 0) {
+    container.replaceChildren();
+    return;
+  }
+
+  const panel = element("section", "page-preview");
+  const header = element("div", "page-preview-header");
+  const title = element("strong", "", preview.groupTitle ?? "视频选集");
+  const count = element(
+    "span",
+    "",
+    preview.isLoading ? "探测中" : `已选 ${preview.selectedPages.size}/${preview.items.length}`,
+  );
+  header.append(title, count);
+  panel.append(header);
+
+  if (preview.error) {
+    panel.append(element("div", "page-preview-error", preview.error));
+  }
+
+  if (preview.isLoading) {
+    panel.append(element("div", "page-preview-empty", "正在探测选集..."));
+    container.replaceChildren(panel);
+    return;
+  }
+
+  if (preview.items.length > 0) {
+    panel.append(buildPagePreviewControls(container, state));
+    const list = element("div", "page-preview-list");
+    list.append(
+      ...preview.items.map((item) => buildPagePreviewRow(container, state, item)),
+    );
+    panel.append(list);
+  }
+
+  container.replaceChildren(panel);
+}
+
+function buildPagePreviewControls(container: HTMLElement, state: AppState): HTMLElement {
+  const controls = element("div", "page-preview-controls");
+  const selectAll = element("button", "secondary compact", "全选");
+  selectAll.type = "button";
+  selectAll.dataset.testid = "select-all-pages";
+  selectAll.addEventListener("click", () => {
+    state.pagePreview = {
+      ...state.pagePreview,
+      selectedPages: new Set(state.pagePreview.items.map((item) => item.page)),
+      error: null,
+    };
+    renderPagePreview(container, state);
+  });
+
+  const clear = element("button", "secondary compact", "清空");
+  clear.type = "button";
+  clear.dataset.testid = "clear-page-selection";
+  clear.addEventListener("click", () => {
+    state.pagePreview = {
+      ...state.pagePreview,
+      selectedPages: new Set<number>(),
+      error: null,
+    };
+    renderPagePreview(container, state);
+  });
+
+  const range = element("div", "page-range");
+  const start = document.createElement("input");
+  start.type = "number";
+  start.dataset.testid = "page-range-start";
+  start.value = String(firstSelectedOrFirstPage(state.pagePreview.items, state.pagePreview.selectedPages));
+  const end = document.createElement("input");
+  end.type = "number";
+  end.dataset.testid = "page-range-end";
+  end.value = String(lastSelectedOrLastPage(state.pagePreview.items, state.pagePreview.selectedPages));
+  const apply = element("button", "secondary compact", "应用范围");
+  apply.type = "button";
+  apply.dataset.testid = "apply-page-range";
+  apply.addEventListener("click", () => {
+    const startPage = Number(start.value);
+    const endPage = Number(end.value);
+    if (!Number.isFinite(startPage) || !Number.isFinite(endPage)) {
+      return;
+    }
+    const low = Math.min(startPage, endPage);
+    const high = Math.max(startPage, endPage);
+    const next = state.pagePreview.items
+      .filter((item) => item.page >= low && item.page <= high)
+      .map((item) => item.page);
+    state.pagePreview = {
+      ...state.pagePreview,
+      selectedPages: new Set(next),
+      error: next.length > 0 ? null : "范围内没有分 P",
+    };
+    renderPagePreview(container, state);
+  });
+  range.append(start, element("span", "", "-"), end, apply);
+
+  controls.append(selectAll, clear, range);
+  return controls;
+}
+
+function buildPagePreviewRow(
+  container: HTMLElement,
+  state: AppState,
+  item: ProbePageItem,
+): HTMLElement {
+  const label = element("label", "page-preview-row");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = state.pagePreview.selectedPages.has(item.page);
+  checkbox.dataset.testid = `page-checkbox-${item.page}`;
+  checkbox.addEventListener("change", () => {
+    const selectedPages = new Set(state.pagePreview.selectedPages);
+    if (checkbox.checked) {
+      selectedPages.add(item.page);
+    } else {
+      selectedPages.delete(item.page);
+    }
+    state.pagePreview = {
+      ...state.pagePreview,
+      selectedPages,
+      error: null,
+    };
+    renderPagePreview(container, state);
+  });
+  label.append(
+    checkbox,
+    element("span", "page-number", String(item.page)),
+    element("span", "page-title", item.title),
+    element("span", "page-quality", item.quality ?? "自动"),
+  );
+  return label;
+}
+
+function firstSelectedOrFirstPage(items: ProbePageItem[], selectedPages: Set<number>): number {
+  return items.find((item) => selectedPages.has(item.page))?.page ?? items[0]?.page ?? 1;
+}
+
+function lastSelectedOrLastPage(items: ProbePageItem[], selectedPages: Set<number>): number {
+  const selectedItems = items.filter((item) => selectedPages.has(item.page));
+  return selectedItems[selectedItems.length - 1]?.page ?? items[items.length - 1]?.page ?? 1;
 }
 
 function buildTaskGroupCard(created: CreatedTaskGroup): HTMLElement {

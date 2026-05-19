@@ -5,7 +5,7 @@ pub mod queue;
 use crate::errors::AppResult;
 use crate::media::output_path;
 use crate::models::{DownloadEngine, DownloadTask, TaskGroup, TaskState};
-use crate::platform::{PlatformDownloader, ProbeInput};
+use crate::platform::{DownloadItem, PlatformDownloader, ProbeInput};
 use chrono::Utc;
 use serde::Serialize;
 use std::path::Path;
@@ -17,6 +17,7 @@ pub struct CreateTaskRequest {
     pub output_dir: String,
     pub engine: DownloadEngine,
     pub has_login: bool,
+    pub selected_pages: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -48,11 +49,16 @@ pub async fn create_group_from_probe(
         created_at: Utc::now(),
     };
     let is_collection = probe.items.len() > 1;
-    let tasks = probe
-        .items
+    let items = filtered_probe_items(probe.items, request.selected_pages.as_deref())?;
+    let tasks = items
         .into_iter()
         .enumerate()
         .map(|(idx, item)| {
+            let page_index = item
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.page)
+                .unwrap_or((idx + 1) as u32);
             let output_title = if is_collection {
                 strip_leading_numeric_prefix(&item.title)
             } else {
@@ -62,7 +68,7 @@ pub async fn create_group_from_probe(
                 Path::new(&request.output_dir),
                 "bilibili",
                 &group.title,
-                is_collection.then_some((idx + 1) as u32),
+                is_collection.then_some(page_index),
                 output_title,
             );
             DownloadTask {
@@ -87,6 +93,37 @@ pub async fn create_group_from_probe(
         })
         .collect();
     Ok(CreatedTaskGroup { group, tasks })
+}
+
+fn filtered_probe_items(
+    items: Vec<DownloadItem>,
+    selected_pages: Option<&[u32]>,
+) -> AppResult<Vec<DownloadItem>> {
+    let Some(selected_pages) = selected_pages else {
+        return Ok(items);
+    };
+    let selected = selected_pages
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let filtered = items
+        .into_iter()
+        .filter(|item| {
+            item.metadata
+                .as_ref()
+                .map(|metadata| selected.contains(&metadata.page))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+    if filtered.is_empty() {
+        return Err(crate::errors::AppError::structured(
+            crate::errors::ErrorCode::UnsupportedContent,
+            "selected pages do not match this video",
+        ));
+    }
+
+    Ok(filtered)
 }
 
 fn strip_leading_numeric_prefix(title: &str) -> &str {
@@ -119,6 +156,7 @@ mod tests {
                 output_dir: "D:\\Videos".into(),
                 engine: DownloadEngine::Native,
                 has_login: true,
+                selected_pages: None,
             },
         )
         .await
@@ -151,6 +189,7 @@ mod tests {
                 output_dir: "D:\\Videos".into(),
                 engine: DownloadEngine::Native,
                 has_login: false,
+                selected_pages: None,
             },
         )
         .await
@@ -173,6 +212,7 @@ mod tests {
                 output_dir: "D:\\Videos".into(),
                 engine: DownloadEngine::Native,
                 has_login: false,
+                selected_pages: None,
             },
         )
         .await
@@ -181,6 +221,49 @@ mod tests {
         assert_eq!(result.tasks[0].bvid.as_deref(), Some("BV1xx411c7mD"));
         assert_eq!(result.tasks[0].cid, Some(111));
         assert_eq!(result.tasks[0].page, Some(1));
+    }
+
+    #[tokio::test]
+    async fn creates_only_selected_pages_and_keeps_original_page_numbers() {
+        let result = create_group_from_probe(
+            &SelectedPagesDownloader,
+            CreateTaskRequest {
+                url: "https://www.bilibili.com/video/BV17KxizLE17?p=58".into(),
+                output_dir: "D:\\Videos".into(),
+                engine: DownloadEngine::Native,
+                has_login: false,
+                selected_pages: Some(vec![58, 60]),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result
+                .tasks
+                .iter()
+                .map(|task| task.page.unwrap())
+                .collect::<Vec<_>>(),
+            vec![58, 60]
+        );
+        let filenames = result
+            .tasks
+            .iter()
+            .map(|task| {
+                std::path::Path::new(&task.output_file)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            filenames,
+            vec![
+                "58 - 字幕版_PU2E_L0_Chant 1 Page 5_video.mp4",
+                "60 - 字幕版_PU2E_L0_Chant 3 Page 7_video.mp4",
+            ]
+        );
     }
 
     struct MetadataDownloader;
@@ -206,6 +289,50 @@ mod tests {
                             page: 1,
                         }),
                     }],
+                })
+            })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _input: DownloadInput,
+            _sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async { unreachable!("task creation tests do not download") })
+        }
+    }
+
+    struct SelectedPagesDownloader;
+
+    impl PlatformDownloader for SelectedPagesDownloader {
+        fn probe<'a>(
+            &'a self,
+            _input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async {
+                Ok(ProbeResult {
+                    group_title: "剑桥少儿英语PowerUp 2nd Edition".into(),
+                    used_login: false,
+                    items: [58, 59, 60]
+                        .into_iter()
+                        .map(|page| DownloadItem {
+                            title: match page {
+                                58 => "字幕版_PU2E_L0_Chant 1 Page 5_video",
+                                59 => "字幕版_PU2E_L0_Chant 2 Page 6_video",
+                                _ => "字幕版_PU2E_L0_Chant 3 Page 7_video",
+                            }
+                            .into(),
+                            output_file: format!("{page}.mp4"),
+                            quality: Some("720P".into()),
+                            requires_login: false,
+                            bytes_total: None,
+                            metadata: Some(DownloadItemMetadata {
+                                bvid: "BV17KxizLE17".into(),
+                                cid: page as u64,
+                                page,
+                            }),
+                        })
+                        .collect(),
                 })
             })
         }

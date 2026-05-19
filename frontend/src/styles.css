@@ -146,11 +146,112 @@ button {
   color: #1f2937;
 }
 
+.compact {
+  padding: 7px 10px;
+}
+
+.download-actions {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+}
+
 .task-list,
 .platform-list {
   display: grid;
   gap: 10px;
   margin-top: 14px;
+}
+
+.page-preview-host {
+  margin-top: 10px;
+}
+
+.page-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.page-preview-header,
+.page-preview-controls,
+.page-preview-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-preview-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.page-preview-header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.page-preview-header span,
+.page-quality {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.page-preview-controls {
+  grid-template-columns: auto auto minmax(260px, 1fr);
+}
+
+.page-range {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.page-range input {
+  width: 82px;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+
+.page-preview-list {
+  display: grid;
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid #edf0f5;
+}
+
+.page-preview-row {
+  grid-template-columns: auto 48px minmax(0, 1fr) auto;
+  min-height: 36px;
+  padding: 7px 0;
+  border-bottom: 1px solid #edf0f5;
+  color: #475569;
+  font-size: 13px;
+}
+
+.page-number {
+  font-weight: 700;
+  color: #111827;
+}
+
+.page-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #111827;
+}
+
+.page-preview-error {
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.page-preview-empty {
+  color: #64748b;
+  font-size: 13px;
 }
 
 .task-card,
@@ -357,8 +458,14 @@ button {
   .settings-grid,
   .child-task,
   .task-group-summary,
+  .page-preview-controls,
   .tool-status {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .download-actions,
+  .page-range {
+    flex-wrap: wrap;
   }
 
   .platform-summary {
@@ -383,5 +490,13 @@ button {
   .primary,
   .secondary {
     width: 100%;
+  }
+
+  .page-preview-row {
+    grid-template-columns: auto 40px minmax(0, 1fr);
+  }
+
+  .page-quality {
+    grid-column: 3;
   }
 }

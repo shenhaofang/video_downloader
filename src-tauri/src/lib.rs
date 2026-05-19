@@ -25,6 +25,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::probe_bilibili_pages,
             commands::create_task,
             commands::list_task_groups,
             commands::run_task,
