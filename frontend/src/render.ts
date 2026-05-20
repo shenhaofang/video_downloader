@@ -2,6 +2,7 @@ import {
   clearBilibiliLogin as defaultClearBilibiliLogin,
   createTask as defaultCreateTask,
   getToolStatus as defaultGetToolStatus,
+  installYtDlp as defaultInstallYtDlp,
   listTaskGroups as defaultListTaskGroups,
   pollBilibiliLogin as defaultPollBilibiliLogin,
   probeBilibiliPages as defaultProbeBilibiliPages,
@@ -33,6 +34,7 @@ export interface RenderDependencies {
   pollBilibiliLogin?: typeof defaultPollBilibiliLogin;
   probeBilibiliPages?: typeof defaultProbeBilibiliPages;
   clearBilibiliLogin?: typeof defaultClearBilibiliLogin;
+  installYtDlp?: typeof defaultInstallYtDlp;
   getToolStatus?: typeof defaultGetToolStatus;
   listTaskGroups?: typeof defaultListTaskGroups;
   progressPollMs?: number;
@@ -54,6 +56,7 @@ export function renderApp(
   const pollBilibiliLogin = dependencies.pollBilibiliLogin ?? defaultPollBilibiliLogin;
   const probeBilibiliPages = dependencies.probeBilibiliPages ?? defaultProbeBilibiliPages;
   const clearBilibiliLogin = dependencies.clearBilibiliLogin ?? defaultClearBilibiliLogin;
+  const installYtDlp = dependencies.installYtDlp ?? defaultInstallYtDlp;
   const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
   const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
   const progressPollMs = dependencies.progressPollMs ?? 1000;
@@ -69,6 +72,7 @@ export function renderApp(
       pollBilibiliLogin,
       probeBilibiliPages,
       clearBilibiliLogin,
+      installYtDlp,
       getToolStatus,
       listTaskGroups,
       progressPollMs,
@@ -792,6 +796,22 @@ function buildSettingsPanel(
 
   const ytdlp = field("yt-dlp 路径", "ytdlp-path", "C:\\tools\\yt-dlp.exe");
   ytdlp.querySelector("input")!.value = state.settings.ytdlpPath ?? "";
+  const installYtdlp = element("button", "secondary", "下载 yt-dlp");
+  installYtdlp.type = "button";
+  installYtdlp.dataset.testid = "install-ytdlp";
+  installYtdlp.addEventListener("click", async () => {
+    const idleLabel = "下载 yt-dlp";
+    installYtdlp.setAttribute("aria-busy", "true");
+    installYtdlp.textContent = "下载中";
+    try {
+      state.settings = await dependencies.installYtDlp();
+      state.toolStatus = await dependencies.getToolStatus();
+      renderApp(root, state, dependencies);
+    } finally {
+      installYtdlp.removeAttribute("aria-busy");
+      installYtdlp.textContent = idleLabel;
+    }
+  });
   const ffmpeg = field("ffmpeg 路径", "ffmpeg-path", "C:\\tools\\ffmpeg.exe");
   ffmpeg.querySelector("input")!.value = state.settings.ffmpegPath ?? "";
   const ffprobe = field("ffprobe 路径", "ffprobe-path", "C:\\tools\\ffprobe.exe");
@@ -835,7 +855,17 @@ function buildSettingsPanel(
     state.toolStatus = await dependencies.getToolStatus();
     renderApp(root, state, dependencies);
   });
-  settings.append(rootField, concurrency, engine, ytdlp, ffmpeg, ffprobe, toolStatus, save);
+  settings.append(
+    rootField,
+    concurrency,
+    engine,
+    ytdlp,
+    installYtdlp,
+    ffmpeg,
+    ffprobe,
+    toolStatus,
+    save,
+  );
   panel.append(settings);
   return panel;
 }

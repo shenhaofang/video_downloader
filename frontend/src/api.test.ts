@@ -4,6 +4,7 @@ import {
   createTask,
   getConfig,
   getToolStatus,
+  installYtDlp,
   listTaskGroups,
   pollBilibiliLogin,
   probeBilibiliPages,
@@ -296,5 +297,23 @@ describe("api fallback detection", () => {
       ffprobe: "missing",
     });
     expect(invokeMock).toHaveBeenCalledWith("get_tool_status");
+  });
+
+  test("installs yt-dlp through Tauri command and normalizes config", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      download_root: "D:\\Videos",
+      concurrency: 2,
+      default_engine: "native",
+      ytdlp_path: "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      ffmpeg_path: null,
+      ffprobe_path: null,
+    });
+
+    await expect(installYtDlp()).resolves.toMatchObject({
+      ytdlpPath: "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      defaultEngine: "native",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("install_ytdlp");
   });
 });

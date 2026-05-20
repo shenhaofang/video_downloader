@@ -100,6 +100,21 @@ export async function saveConfig(input: AppSettings): Promise<AppSettings> {
   }
 }
 
+export async function installYtDlp(): Promise<AppSettings> {
+  try {
+    const result = await invoke<TauriConfig>("install_ytdlp");
+    return normalizeConfig(result);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return {
+        ...fallbackConfig(),
+        ytdlpPath: "D:\\Tools\\yt-dlp.exe",
+      };
+    }
+    throw error;
+  }
+}
+
 export async function createTask(input: CreateTaskInput): Promise<CreatedTaskGroup> {
   try {
     const result = await invoke<CreatedTaskGroup>("create_task", { input });

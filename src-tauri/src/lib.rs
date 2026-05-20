@@ -34,6 +34,7 @@ pub fn run() {
             commands::start_bilibili_login,
             commands::poll_bilibili_login,
             commands::clear_bilibili_login,
+            commands::install_ytdlp,
             commands::get_tool_status
         ])
         .run(tauri::generate_context!())

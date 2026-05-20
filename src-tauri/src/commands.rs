@@ -3,7 +3,7 @@ use crate::auth::bilibili::{
     poll_login_qr, request_login_qr, verify_login_cookies, LoginPollOutcome, LoginPollResult,
     LoginQr,
 };
-use crate::errors::AppResult;
+use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::models::{AppConfig, DownloadEngine};
 use crate::platform::bilibili::native::NativeBilibiliDownloader;
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
@@ -12,6 +12,9 @@ use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use uuid::Uuid;
+
+const YTDLP_DOWNLOAD_URL: &str =
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskCommand {
@@ -124,12 +127,73 @@ pub async fn get_tool_status(state: tauri::State<'_, AppState>) -> AppResult<Too
     get_tool_status_from_state(state.inner()).await
 }
 
+#[tauri::command]
+pub async fn install_ytdlp(state: tauri::State<'_, AppState>) -> AppResult<AppConfig> {
+    install_ytdlp_from_state(state.inner()).await
+}
+
 async fn get_config_from_state(state: &AppState) -> AppResult<AppConfig> {
     state.storage.load_config().await
 }
 
 async fn save_config_from_state(state: &AppState, input: AppConfig) -> AppResult<AppConfig> {
     let config = crate::config::with_normalized_concurrency(input);
+    state.storage.save_config(&config).await?;
+    Ok(config)
+}
+
+async fn install_ytdlp_from_state(state: &AppState) -> AppResult<AppConfig> {
+    let bytes = download_ytdlp_bytes(YTDLP_DOWNLOAD_URL).await?;
+    install_ytdlp_bytes_from_state(state, bytes).await
+}
+
+async fn download_ytdlp_bytes(url: &str) -> AppResult<Vec<u8>> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::USER_AGENT, "video-downloader")
+        .send()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::structured(
+            ErrorCode::NetworkError,
+            format!("yt-dlp download failed with status {}", response.status()),
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+    if bytes.is_empty() {
+        return Err(AppError::structured(
+            ErrorCode::NetworkError,
+            "yt-dlp download returned an empty file",
+        ));
+    }
+
+    Ok(bytes.to_vec())
+}
+
+async fn install_ytdlp_bytes_from_state(state: &AppState, bytes: Vec<u8>) -> AppResult<AppConfig> {
+    if bytes.is_empty() {
+        return Err(AppError::structured(
+            ErrorCode::NetworkError,
+            "yt-dlp download returned an empty file",
+        ));
+    }
+
+    let install_dir = state.data_dir().join("tools").join("yt-dlp");
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    let path = install_dir.join("yt-dlp.exe");
+    std::fs::write(&path, bytes)
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+
+    let mut config = state.storage.load_config().await?;
+    config.ytdlp_path = Some(path.to_string_lossy().to_string());
+    let config = crate::config::with_normalized_concurrency(config);
     state.storage.save_config(&config).await?;
     Ok(config)
 }
@@ -722,6 +786,26 @@ mod tests {
         assert_eq!(status.ffprobe, "missing");
         cleanup_state(state).await;
         fs::remove_dir_all(tool_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_ytdlp_bytes_from_state_writes_binary_and_persists_path() {
+        let state = command_test_state().await;
+
+        let saved = install_ytdlp_bytes_from_state(&state, b"yt-dlp binary".to_vec())
+            .await
+            .unwrap();
+
+        let path = state
+            .data_dir()
+            .join("tools")
+            .join("yt-dlp")
+            .join("yt-dlp.exe");
+        assert_eq!(saved.ytdlp_path, Some(path.to_string_lossy().to_string()));
+        assert_eq!(fs::read(&path).unwrap(), b"yt-dlp binary");
+        let status = get_tool_status_from_state(&state).await.unwrap();
+        assert_eq!(status.ytdlp, "available");
+        cleanup_state(state).await;
     }
 
     #[tokio::test]

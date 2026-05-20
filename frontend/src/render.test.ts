@@ -533,4 +533,33 @@ describe("renderApp", () => {
       "E:\\Videos\\bilibili",
     );
   });
+
+  test("installs yt-dlp from settings and refreshes status", async () => {
+    const installYtDlp = vi.fn().mockResolvedValue({
+      downloadRoot: "D:\\Videos",
+      concurrency: 2,
+      defaultEngine: "native",
+      ytdlpPath: "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      ffmpegPath: null,
+      ffprobePath: null,
+    });
+    const getToolStatus = vi.fn().mockResolvedValue({
+      ytdlp: "available",
+      ffmpeg: "missing",
+      ffprobe: "missing",
+    });
+    const state = createInitialState();
+    renderApp(root, state, { installYtDlp, getToolStatus });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='install-ytdlp']")?.click();
+
+    await vi.waitFor(() => {
+      expect(installYtDlp).toHaveBeenCalledOnce();
+      expect(root.querySelector<HTMLInputElement>("[data-testid='ytdlp-path']")?.value).toBe(
+        "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      );
+      expect(root.textContent).toContain("yt-dlp可用");
+    });
+  });
 });
