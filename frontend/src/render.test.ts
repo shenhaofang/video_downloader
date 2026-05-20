@@ -461,6 +461,7 @@ describe("renderApp", () => {
     await vi.waitFor(() => {
       expect(listTaskGroups).toHaveBeenCalled();
       expect(root.textContent).toContain("75%");
+      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("下载中");
     });
 
     resolveRunTask({
@@ -471,6 +472,44 @@ describe("renderApp", () => {
     });
     await vi.waitFor(() => {
       expect(root.textContent).toContain("100%");
+    });
+  });
+
+  test("refreshes persisted task state when running a task fails quickly", async () => {
+    const baseCollection = createdCollectionFixture();
+    const createdCollection = {
+      ...baseCollection,
+      tasks: [baseCollection.tasks[0]],
+    };
+    const failedCollection = {
+      ...createdCollection,
+      tasks: [
+        {
+          ...createdCollection.tasks[0],
+          state: "failed" as const,
+          retry_count: 1,
+        },
+      ],
+    };
+    const createTask = vi.fn().mockResolvedValue(createdCollection);
+    const runTask = vi.fn().mockRejectedValue(new Error("ffmpeg missing"));
+    const listTaskGroups = vi.fn().mockResolvedValue([failedCollection]);
+    renderApp(root, createInitialState(), {
+      createTask,
+      runTask,
+      listTaskGroups,
+      progressPollMs: 10_000,
+    });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV1xx411c7mD";
+    root.querySelector<HTMLButtonElement>("[data-testid='add-task']")!.click();
+
+    await vi.waitFor(() => {
+      expect(runTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(listTaskGroups).toHaveBeenCalled();
+      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("失败");
+      expect(root.textContent).toContain("重试 1/3");
     });
   });
 

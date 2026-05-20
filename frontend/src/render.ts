@@ -244,12 +244,19 @@ async function runTasksWithConcurrency(
     while (nextTaskIndex < tasks.length) {
       const task = tasks[nextTaskIndex];
       nextTaskIndex += 1;
-      const updated = await runTaskWithProgressPolling(state, taskList, task.id, {
-        runTask: dependencies.runTask,
-        listTaskGroups: dependencies.listTaskGroups,
-        progressPollMs: dependencies.progressPollMs,
-      });
-      replaceTask(state, updated);
+      try {
+        const updated = await runTaskWithProgressPolling(state, taskList, task.id, {
+          runTask: dependencies.runTask,
+          listTaskGroups: dependencies.listTaskGroups,
+          progressPollMs: dependencies.progressPollMs,
+        });
+        replaceTask(state, updated);
+      } catch (error) {
+        console.error("Failed to run task", error);
+        await refreshPersistedTaskGroups(state, taskList, {
+          listTaskGroups: dependencies.listTaskGroups,
+        });
+      }
       renderTaskList(taskList, state);
     }
   });
@@ -270,9 +277,7 @@ async function runTaskWithProgressPolling(
     }
     isPolling = true;
     try {
-      const persistedGroups = await dependencies.listTaskGroups();
-      mergePersistedTaskGroups(state, persistedGroups);
-      renderTaskList(taskList, state);
+      await refreshPersistedTaskGroups(state, taskList, dependencies);
     } catch (error) {
       console.error("Failed to refresh task progress", error);
     } finally {
@@ -285,6 +290,16 @@ async function runTaskWithProgressPolling(
   } finally {
     window.clearInterval(intervalId);
   }
+}
+
+async function refreshPersistedTaskGroups(
+  state: AppState,
+  taskList: HTMLElement,
+  dependencies: Pick<Required<RenderDependencies>, "listTaskGroups">,
+): Promise<void> {
+  const persistedGroups = await dependencies.listTaskGroups();
+  mergePersistedTaskGroups(state, persistedGroups);
+  renderTaskList(taskList, state);
 }
 
 function mergePersistedTaskGroups(state: AppState, persistedGroups: CreatedTaskGroup[]): void {
@@ -306,9 +321,7 @@ function replaceTask(state: AppState, updated: DownloadTask): void {
     const index = group.tasks.findIndex((task) => task.id === updated.id);
     if (index >= 0) {
       group.tasks[index] = updated;
-      group.group.state = group.tasks.every((task) => task.state === "completed")
-        ? "completed"
-        : group.group.state;
+      group.group.state = taskGroupState(group);
       return;
     }
   }
@@ -523,7 +536,7 @@ function buildTaskGroupCard(created: CreatedTaskGroup): HTMLElement {
   summary.append(
     element("strong", "", created.group.title),
     element("span", "", created.group.output_dir),
-    element("span", "state-pill", stateLabel(created.group.state)),
+    element("span", "state-pill", stateLabel(taskGroupState(created))),
   );
   const children = element("div", "child-task-list");
   children.append(...created.tasks.map(buildChildTask));
@@ -909,13 +922,49 @@ function fileName(path: string): string {
 
 function stateLabel(state: string): string {
   const labels: Record<string, string> = {
+    pending: "等待中",
+    probing: "探测中",
     queued: "排队中",
     downloading: "下载中",
     merging: "合并中",
     completed: "已完成",
     failed: "失败",
+    interrupted: "已中断",
+    cancelled: "已取消",
   };
   return labels[state] ?? state;
+}
+
+function taskGroupState(created: CreatedTaskGroup): DownloadTask["state"] {
+  const states = created.tasks.map((task) => task.state);
+  if (states.length === 0) {
+    return created.group.state;
+  }
+  if (states.includes("merging")) {
+    return "merging";
+  }
+  if (states.includes("downloading")) {
+    return "downloading";
+  }
+  if (states.includes("probing")) {
+    return "probing";
+  }
+  if (states.every((state) => state === "completed")) {
+    return "completed";
+  }
+  if (states.includes("failed")) {
+    return "failed";
+  }
+  if (states.includes("interrupted")) {
+    return "interrupted";
+  }
+  if (states.includes("cancelled")) {
+    return "cancelled";
+  }
+  if (states.includes("pending")) {
+    return "pending";
+  }
+  return "queued";
 }
 
 function loginStatusText(status: string | null, message: string | null): string {
