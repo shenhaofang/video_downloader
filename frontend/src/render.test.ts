@@ -513,6 +513,274 @@ describe("renderApp", () => {
     });
   });
 
+  test("shows task failure details in child rows", () => {
+    const failedCollection = createdCollectionFixture();
+    failedCollection.tasks[0] = {
+      ...failedCollection.tasks[0],
+      state: "failed",
+      error_code: "platform_changed",
+      error_message: "duplicate field `base_url`",
+    };
+    renderApp(root, {
+      ...createInitialState(),
+      taskGroups: [failedCollection],
+    });
+
+    expect(root.textContent).toContain("失败原因");
+    expect(root.textContent).toContain("duplicate field `base_url`");
+  });
+
+  test("controls individual child tasks", async () => {
+    const createdCollection = createdCollectionFixture();
+    const pauseTask = vi.fn().mockResolvedValue({
+      ...createdCollection.tasks[1],
+      state: "paused",
+    });
+    const startTask = vi.fn().mockResolvedValue({
+      ...createdCollection.tasks[1],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    const failedCollection = {
+      ...createdCollection,
+      tasks: [
+        {
+          ...createdCollection.tasks[0],
+          state: "failed" as const,
+          error_message: "network failed",
+        },
+        createdCollection.tasks[1],
+      ],
+    };
+    const retryTask = vi.fn().mockResolvedValue({
+      ...failedCollection.tasks[0],
+      state: "completed",
+      error_message: null,
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    const deleteTask = vi.fn().mockResolvedValue([
+      {
+        ...createdCollection,
+        tasks: [createdCollection.tasks[1]],
+      },
+    ]);
+    const state = {
+      ...createInitialState(),
+      taskGroups: [failedCollection],
+    };
+    renderApp(root, state, {
+      pauseTask,
+      startTask,
+      retryTask,
+      deleteTask,
+      progressPollMs: 10_000,
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='pause-task-task-2']")!.click();
+    await vi.waitFor(() => {
+      expect(pauseTask).toHaveBeenCalledWith({ task_id: "task-2" });
+      expect(root.textContent).toContain("已暂停");
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='retry-task-task-1']")!.click();
+    await vi.waitFor(() => {
+      expect(retryTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(root.textContent).toContain("100%");
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='start-task-task-2']")!.click();
+    await vi.waitFor(() => {
+      expect(startTask).toHaveBeenCalledWith({ task_id: "task-2" });
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='delete-task-task-1']")!.click();
+    await vi.waitFor(() => {
+      expect(deleteTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(root.textContent).not.toContain("01 - 安装 Tauri");
+    });
+  });
+
+  test("refreshes persisted task state when manual retry fails", async () => {
+    const createdCollection = createdCollectionFixture();
+    const failedCollection = {
+      ...createdCollection,
+      tasks: [
+        {
+          ...createdCollection.tasks[0],
+          state: "failed" as const,
+          error_message: "ffmpeg failed",
+          retry_count: 2,
+        },
+      ],
+    };
+    const retryTask = vi.fn().mockRejectedValue(new Error("ffmpeg failed"));
+    const listTaskGroups = vi.fn().mockResolvedValue([failedCollection]);
+    const state = {
+      ...createInitialState(),
+      taskGroups: [
+        {
+          ...createdCollection,
+          tasks: [
+            {
+              ...createdCollection.tasks[0],
+              state: "failed" as const,
+              error_message: "network failed",
+            },
+          ],
+        },
+      ],
+    };
+    renderApp(root, state, {
+      retryTask,
+      listTaskGroups,
+      progressPollMs: 10_000,
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='retry-task-task-1']")!.click();
+
+    await vi.waitFor(() => {
+      expect(retryTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(listTaskGroups).toHaveBeenCalled();
+      expect(root.textContent).toContain("ffmpeg failed");
+      expect(root.textContent).toContain("重试 2/3");
+    });
+  });
+
+  test("continues unfinished child tasks from the group action", async () => {
+    const createdCollection = createdCollectionFixture();
+    const partialCollection = {
+      ...createdCollection,
+      tasks: [
+        {
+          ...createdCollection.tasks[0],
+          state: "completed" as const,
+          bytes_downloaded: 100,
+          bytes_total: 100,
+        },
+        {
+          ...createdCollection.tasks[1],
+          state: "queued" as const,
+          bytes_downloaded: 0,
+          bytes_total: 100,
+        },
+        {
+          ...createdCollection.tasks[0],
+          id: "task-3",
+          title: "03 - 打包发布",
+          state: "failed" as const,
+          error_message: "network failed",
+        },
+      ],
+    };
+    const startTask = vi.fn().mockResolvedValue({
+      ...partialCollection.tasks[1],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    const retryTask = vi.fn().mockResolvedValue({
+      ...partialCollection.tasks[2],
+      state: "completed",
+      error_message: null,
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    });
+    const runTask = vi.fn();
+    renderApp(
+      root,
+      {
+        ...createInitialState(),
+        taskGroups: [partialCollection],
+      },
+      { startTask, retryTask, runTask, progressPollMs: 10_000 },
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-testid='continue-group-group-1']")!.click();
+
+    await vi.waitFor(() => {
+      expect(startTask).toHaveBeenCalledWith({ task_id: "task-2" });
+      expect(retryTask).toHaveBeenCalledWith({ task_id: "task-3" });
+      expect(runTask).not.toHaveBeenCalled();
+      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("已完成");
+    });
+  });
+
+  test("pauses active child tasks from the group action", async () => {
+    const createdCollection = createdCollectionFixture();
+    const activeCollection = {
+      ...createdCollection,
+      tasks: [
+        {
+          ...createdCollection.tasks[0],
+          state: "completed" as const,
+          bytes_downloaded: 100,
+          bytes_total: 100,
+        },
+        {
+          ...createdCollection.tasks[1],
+          state: "queued" as const,
+          bytes_downloaded: 0,
+          bytes_total: 100,
+        },
+        {
+          ...createdCollection.tasks[0],
+          id: "task-3",
+          title: "03 - 打包发布",
+          state: "downloading" as const,
+          bytes_downloaded: 40,
+          bytes_total: 100,
+        },
+      ],
+    };
+    const pauseTask = vi.fn().mockImplementation(({ task_id }: { task_id: string }) => {
+      const task = activeCollection.tasks.find((item) => item.id === task_id)!;
+      return Promise.resolve({
+        ...task,
+        state: "paused",
+      });
+    });
+    renderApp(
+      root,
+      {
+        ...createInitialState(),
+        taskGroups: [activeCollection],
+      },
+      { pauseTask },
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-testid='pause-group-group-1']")!.click();
+
+    await vi.waitFor(() => {
+      expect(pauseTask).toHaveBeenCalledTimes(2);
+      expect(pauseTask).toHaveBeenCalledWith({ task_id: "task-2" });
+      expect(pauseTask).toHaveBeenCalledWith({ task_id: "task-3" });
+      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("已暂停");
+    });
+  });
+
+  test("deletes all child tasks from the group action", async () => {
+    const createdCollection = createdCollectionFixture();
+    const deleteTask = vi.fn().mockResolvedValue([]);
+    renderApp(
+      root,
+      {
+        ...createInitialState(),
+        taskGroups: [createdCollection],
+      },
+      { deleteTask },
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-testid='delete-group-group-1']")!.click();
+
+    await vi.waitFor(() => {
+      expect(deleteTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(deleteTask).toHaveBeenCalledWith({ task_id: "task-2" });
+      expect(root.textContent).not.toContain("Rust 桌面应用入门");
+    });
+  });
+
   test("keeps default engine controls in settings only", () => {
     renderApp(root, createInitialState());
 
@@ -578,7 +846,7 @@ describe("renderApp", () => {
       downloadRoot: "D:\\Videos",
       concurrency: 2,
       defaultEngine: "native",
-      ytdlpPath: "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      ytdlpPath: "C:\\Program Files\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe",
       ffmpegPath: null,
       ffprobePath: null,
     });
@@ -596,9 +864,26 @@ describe("renderApp", () => {
     await vi.waitFor(() => {
       expect(installYtDlp).toHaveBeenCalledOnce();
       expect(root.querySelector<HTMLInputElement>("[data-testid='ytdlp-path']")?.value).toBe(
-        "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+        "C:\\Program Files\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe",
       );
       expect(root.textContent).toContain("yt-dlp可用");
     });
+  });
+
+  test("uses install-root dependency placeholders instead of legacy C tools paths", () => {
+    const state = createInitialState();
+    renderApp(root, state);
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+
+    expect(
+      root.querySelector<HTMLInputElement>("[data-testid='ytdlp-path']")?.placeholder,
+    ).toBe("dependencies\\yt-dlp\\yt-dlp.exe");
+    expect(
+      root.querySelector<HTMLInputElement>("[data-testid='ffmpeg-path']")?.placeholder,
+    ).toBe("dependencies\\ffmpeg\\bin\\ffmpeg.exe");
+    expect(
+      root.querySelector<HTMLInputElement>("[data-testid='ffprobe-path']")?.placeholder,
+    ).toBe("dependencies\\ffmpeg\\bin\\ffprobe.exe");
   });
 });

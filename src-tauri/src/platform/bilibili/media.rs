@@ -42,8 +42,10 @@ struct DashData {
 
 #[derive(Debug, Deserialize)]
 struct DashStream {
-    #[serde(alias = "baseUrl")]
-    base_url: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default, rename = "baseUrl")]
+    base_url_camel: Option<String>,
     bandwidth: u64,
 }
 
@@ -80,14 +82,25 @@ pub fn parse_dash_selection(json: &str) -> AppResult<DashSelection> {
     Ok(DashSelection {
         quality: quality_label(data.quality.unwrap_or(0)).to_string(),
         video: MediaStream {
-            url: video.base_url,
+            url: dash_stream_url(&video)?,
             bandwidth: video.bandwidth,
         },
         audio: MediaStream {
-            url: audio.base_url,
+            url: dash_stream_url(&audio)?,
             bandwidth: audio.bandwidth,
         },
     })
+}
+
+fn dash_stream_url(stream: &DashStream) -> AppResult<String> {
+    stream
+        .base_url
+        .as_ref()
+        .or(stream.base_url_camel.as_ref())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::structured(ErrorCode::UnsupportedContent, "missing media stream url")
+        })
 }
 
 pub fn quality_label(qn: u32) -> &'static str {
@@ -235,6 +248,38 @@ mod tests {
 
         assert_eq!(selected.video.url, "https://video.example.com/high.m4s");
         assert_eq!(selected.audio.url, "https://audio.example.com/high.m4s");
+    }
+
+    #[test]
+    fn accepts_dash_streams_with_both_base_url_spellings() {
+        let json = r#"{
+          "code": 0,
+          "message": "0",
+          "data": {
+            "quality": 80,
+            "dash": {
+              "video": [
+                {
+                  "base_url": "https://video.example.com/snake.m4s",
+                  "baseUrl": "https://video.example.com/camel.m4s",
+                  "bandwidth": 200
+                }
+              ],
+              "audio": [
+                {
+                  "base_url": "https://audio.example.com/snake.m4s",
+                  "baseUrl": "https://audio.example.com/camel.m4s",
+                  "bandwidth": 90
+                }
+              ]
+            }
+          }
+        }"#;
+
+        let selected = parse_dash_selection(json).unwrap();
+
+        assert_eq!(selected.video.url, "https://video.example.com/snake.m4s");
+        assert_eq!(selected.audio.url, "https://audio.example.com/snake.m4s");
     }
 
     #[test]

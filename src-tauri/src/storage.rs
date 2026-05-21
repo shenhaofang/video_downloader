@@ -238,6 +238,42 @@ impl Storage {
         task_from_row(row)
     }
 
+    pub async fn delete_task(&self, task_id: Uuid) -> AppResult<()> {
+        let task = self.load_task(task_id).await?;
+        sqlx::query("DELETE FROM task_logs WHERE task_id = ?")
+            .bind(task_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        let result = sqlx::query("DELETE FROM download_tasks WHERE id = ?")
+            .bind(task_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::structured(
+                ErrorCode::FilesystemError,
+                "download task not found",
+            ));
+        }
+
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM download_tasks WHERE group_id = ?")
+                .bind(task.group_id.to_string())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(storage_error)?;
+        if remaining == 0 {
+            sqlx::query("DELETE FROM task_groups WHERE id = ?")
+                .bind(task.group_id.to_string())
+                .execute(&self.pool)
+                .await
+                .map_err(storage_error)?;
+        }
+
+        Ok(())
+    }
+
     pub async fn append_log(&self, task_id: Uuid, line: &str) -> AppResult<()> {
         sqlx::query("INSERT INTO task_logs (task_id, created_at, line) VALUES (?, ?, ?)")
             .bind(task_id.to_string())
@@ -287,6 +323,7 @@ fn parse_state(value: &str) -> TaskState {
         "merging" => TaskState::Merging,
         "completed" => TaskState::Completed,
         "failed" => TaskState::Failed,
+        "paused" => TaskState::Paused,
         "interrupted" => TaskState::Interrupted,
         "cancelled" => TaskState::Cancelled,
         _ => TaskState::Queued,
@@ -302,6 +339,7 @@ fn state_name(state: TaskState) -> &'static str {
         TaskState::Merging => "merging",
         TaskState::Completed => "completed",
         TaskState::Failed => "failed",
+        TaskState::Paused => "paused",
         TaskState::Interrupted => "interrupted",
         TaskState::Cancelled => "cancelled",
     }

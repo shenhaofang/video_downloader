@@ -88,11 +88,19 @@ pub fn media_tool_path_from_exe(
     exe_path: &Path,
 ) -> AppResult<Option<PathBuf>> {
     if let Some(path) = configured_path {
-        return Ok(Some(path));
+        if path.is_file() {
+            return Ok(Some(path));
+        }
     }
 
     let path = installer_managed_media_tool_path_from_exe(exe_path, tool)?;
     Ok(path.is_file().then_some(path))
+}
+
+pub fn installer_managed_media_tool_path(tool: &str) -> AppResult<PathBuf> {
+    let exe = std::env::current_exe()
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    installer_managed_media_tool_path_from_exe(&exe, tool)
 }
 
 pub fn installer_managed_media_tool_path_from_exe(
@@ -100,20 +108,69 @@ pub fn installer_managed_media_tool_path_from_exe(
     tool: &str,
 ) -> AppResult<PathBuf> {
     let name = media_tool_name(tool)?;
-    let exe_dir = exe_path.parent().ok_or_else(|| {
-        AppError::structured(
-            ErrorCode::FilesystemError,
-            "runtime executable has no parent directory",
-        )
-    })?;
+    let exe_dir = app_install_dir_from_exe(exe_path)?;
 
     Ok(exe_dir
-        .join("resources")
-        .join("media-tools")
+        .join("dependencies")
         .join("ffmpeg")
         .join("bin")
         .join(format!("{name}.exe")))
 }
+
+pub fn installer_managed_ytdlp_path() -> AppResult<PathBuf> {
+    let exe = std::env::current_exe()
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    installer_managed_ytdlp_path_from_exe(&exe)
+}
+
+pub fn installer_managed_ytdlp_path_from_exe(exe_path: &Path) -> AppResult<PathBuf> {
+    Ok(app_install_dir_from_exe(exe_path)?
+        .join("dependencies")
+        .join("yt-dlp")
+        .join("yt-dlp.exe"))
+}
+
+fn app_install_dir_from_exe(exe_path: &Path) -> AppResult<&Path> {
+    exe_path.parent().ok_or_else(|| {
+        AppError::structured(
+            ErrorCode::FilesystemError,
+            "runtime executable has no parent directory",
+        )
+    })
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+const NO_WINDOW_PROCESS_CREATION_FLAGS: u32 = 0x08000000;
+
+fn external_command(path: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(path);
+    apply_no_window_to_command(&mut command);
+    command
+}
+
+pub(crate) fn async_external_command(path: &Path) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(path);
+    apply_no_window_to_async_command(&mut command);
+    command
+}
+
+#[cfg(windows)]
+fn apply_no_window_to_command(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(NO_WINDOW_PROCESS_CREATION_FLAGS);
+}
+
+#[cfg(not(windows))]
+fn apply_no_window_to_command(_command: &mut std::process::Command) {}
+
+#[cfg(windows)]
+fn apply_no_window_to_async_command(command: &mut tokio::process::Command) {
+    command.creation_flags(NO_WINDOW_PROCESS_CREATION_FLAGS);
+}
+
+#[cfg(not(windows))]
+fn apply_no_window_to_async_command(_command: &mut tokio::process::Command) {}
 
 pub fn merge_with_ffmpeg(
     ffmpeg_path: &Path,
@@ -121,7 +178,7 @@ pub fn merge_with_ffmpeg(
     audio_path: &Path,
     output_path: &Path,
 ) -> AppResult<()> {
-    let output = std::process::Command::new(ffmpeg_path)
+    let output = external_command(ffmpeg_path)
         .arg("-nostdin")
         .arg("-y")
         .arg("-i")
@@ -132,6 +189,37 @@ pub fn merge_with_ffmpeg(
         .arg("copy")
         .arg(output_path)
         .output()
+        .map_err(|err| AppError::structured(ErrorCode::FfmpegError, err.to_string()))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AppError::structured(
+            ErrorCode::FfmpegError,
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ))
+    }
+}
+
+pub async fn merge_with_ffmpeg_async(
+    ffmpeg_path: &Path,
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> AppResult<()> {
+    let output = async_external_command(ffmpeg_path)
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-i")
+        .arg(video_path)
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-c")
+        .arg("copy")
+        .arg(output_path)
+        .kill_on_drop(true)
+        .output()
+        .await
         .map_err(|err| AppError::structured(ErrorCode::FfmpegError, err.to_string()))?;
 
     if output.status.success() {
@@ -229,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_installer_managed_media_tool_path_next_to_app_resources() {
+    fn builds_installer_managed_media_tool_path_under_install_root_dependencies() {
         let path = installer_managed_media_tool_path_from_exe(
             Path::new("C:\\Users\\me\\AppData\\Local\\Video Downloader\\video-downloader.exe"),
             "ffmpeg",
@@ -239,14 +327,32 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from(
-                "C:\\Users\\me\\AppData\\Local\\Video Downloader\\resources\\media-tools\\ffmpeg\\bin\\ffmpeg.exe"
+                "C:\\Users\\me\\AppData\\Local\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffmpeg.exe"
+            )
+        );
+    }
+
+    #[test]
+    fn builds_installer_managed_ytdlp_path_under_install_root_dependencies() {
+        let path = installer_managed_ytdlp_path_from_exe(Path::new(
+            "C:\\Users\\me\\AppData\\Local\\Video Downloader\\video-downloader.exe",
+        ))
+        .unwrap();
+
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "C:\\Users\\me\\AppData\\Local\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe"
             )
         );
     }
 
     #[test]
     fn media_tool_path_uses_configured_path_before_installer_managed_path() {
-        let configured = PathBuf::from("D:\\tools\\ffmpeg.exe");
+        let dir = temp_test_dir();
+        let configured = dir.join("ffmpeg.exe");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&configured, b"test binary").unwrap();
         let path = media_tool_path_from_exe(
             Some(configured.clone()),
             "ffmpeg",
@@ -255,6 +361,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(path, Some(configured));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn media_tool_path_falls_back_to_installer_managed_path_when_configured_path_is_missing() {
+        let dir = temp_test_dir();
+        let exe_dir = dir.join("app");
+        let installed = exe_dir
+            .join("dependencies")
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffmpeg.exe");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&installed, b"test binary").unwrap();
+
+        let path = media_tool_path_from_exe(
+            Some(PathBuf::from("C:\\tools\\ffmpeg.exe")),
+            "ffmpeg",
+            &exe_dir.join("video-downloader.exe"),
+        )
+        .unwrap();
+
+        assert_eq!(path, Some(installed));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -262,8 +392,7 @@ mod tests {
         let dir = temp_test_dir();
         let exe_dir = dir.join("app");
         let ffmpeg = exe_dir
-            .join("resources")
-            .join("media-tools")
+            .join("dependencies")
             .join("ffmpeg")
             .join("bin")
             .join("ffmpeg.exe");
@@ -349,6 +478,68 @@ mod tests {
     }
 
     #[test]
+    fn app_icon_assets_are_generated_from_logo_source() {
+        let icons_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("icons");
+        let source = icons_dir.join("app-icon.svg");
+        let ico = icons_dir.join("icon.ico");
+        let png_32 = icons_dir.join("32x32.png");
+        let png_128 = icons_dir.join("128x128.png");
+        let png_256 = icons_dir.join("128x128@2x.png");
+
+        assert!(source.is_file());
+        assert!(fs::read_to_string(source)
+            .unwrap()
+            .contains("Video Downloader logo"));
+        assert!(png_32.is_file());
+        assert!(png_128.is_file());
+        assert!(png_256.is_file());
+        assert!(ico.is_file());
+        assert!(fs::metadata(ico).unwrap().len() > 10_000);
+    }
+
+    #[test]
+    fn tauri_config_embeds_generated_logo_icons() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+        let text = fs::read_to_string(config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let icons = json["bundle"]["icon"].as_array().unwrap();
+
+        for expected in [
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.icns",
+            "icons/icon.ico",
+        ] {
+            assert!(icons.contains(&serde_json::json!(expected)));
+        }
+    }
+
+    #[test]
+    fn runtime_external_processes_use_no_window_helpers() {
+        let media_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("media.rs");
+        let media_text = fs::read_to_string(media_path).unwrap();
+        let ytdlp_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("platform")
+            .join("bilibili")
+            .join("yt_dlp.rs");
+        let ytdlp_text = fs::read_to_string(ytdlp_path).unwrap();
+        let production_media_text = media_text.split("#[cfg(test)]").next().unwrap();
+
+        assert!(production_media_text.contains("NO_WINDOW_PROCESS_CREATION_FLAGS"));
+        assert!(production_media_text.contains("creation_flags(NO_WINDOW_PROCESS_CREATION_FLAGS)"));
+        let std_command_new = ["std::process::Command", "::new"].concat();
+        let tokio_command_new = ["tokio::process::Command", "::new"].concat();
+        assert_eq!(production_media_text.matches(&std_command_new).count(), 1);
+        assert_eq!(production_media_text.matches(&tokio_command_new).count(), 1);
+        assert!(!ytdlp_text.contains(&tokio_command_new));
+        assert!(ytdlp_text.contains("async_external_command(path)"));
+    }
+
+    #[test]
     fn nsis_hook_installs_bundled_media_tools_and_cleans_them_on_uninstall() {
         let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("windows")
@@ -362,9 +553,24 @@ mod tests {
         assert!(text.contains("DetailPrint \"Installing bundled FFmpeg media tools"));
         assert!(text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
         assert!(text.contains("install-media-tools.ps1"));
+        assert!(text.contains("-InstallRoot \"$INSTDIR\\dependencies\\ffmpeg\""));
         assert!(text.contains("!macro NSIS_HOOK_PREUNINSTALL"));
-        assert!(text.contains("RMDir /r \"$INSTDIR\\resources\\media-tools\""));
+        assert!(text.contains("RMDir /r \"$INSTDIR\\dependencies\""));
         assert!(text.contains("DeleteRegKey SHCTX \"${MANUPRODUCTKEY}\""));
+    }
+
+    #[test]
+    fn nsis_hook_refreshes_shortcut_icons_after_install() {
+        let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("windows")
+            .join("hooks.nsh");
+        let text = fs::read_to_string(hook_path).unwrap();
+
+        assert!(text.contains("CreateShortcut"));
+        assert!(text.contains("\"$INSTDIR\\${MAINBINARYNAME}.exe\" 0"));
+        assert!(text.contains("$DESKTOP\\${PRODUCTNAME}.lnk"));
+        assert!(text.contains("$SMPROGRAMS\\${PRODUCTNAME}.lnk"));
+        assert!(text.contains("SHChangeNotify"));
     }
 
     #[test]

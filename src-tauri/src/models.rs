@@ -19,6 +19,7 @@ pub enum TaskState {
     Merging,
     Completed,
     Failed,
+    Paused,
     Interrupted,
     Cancelled,
 }

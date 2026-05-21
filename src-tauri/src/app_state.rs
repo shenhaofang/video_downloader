@@ -2,12 +2,17 @@ use crate::auth::bilibili::BilibiliAuth;
 use crate::auth::session_store::SessionStore;
 use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::storage::Storage;
+use futures_util::future::AbortHandle;
+use std::collections::{hash_map::Entry, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppState {
     pub storage: Storage,
     pub bilibili_auth: BilibiliAuth,
+    active_runs: Arc<Mutex<HashMap<Uuid, AbortHandle>>>,
     data_dir: PathBuf,
 }
 
@@ -22,12 +27,38 @@ impl AppState {
         Ok(Self {
             storage,
             bilibili_auth,
+            active_runs: Arc::new(Mutex::new(HashMap::new())),
             data_dir,
         })
     }
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    pub fn register_task_abort(&self, task_id: Uuid, handle: AbortHandle) -> bool {
+        match self.active_runs.lock().unwrap().entry(task_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(handle);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    pub fn abort_task(&self, task_id: Uuid) -> bool {
+        self.active_runs
+            .lock()
+            .unwrap()
+            .remove(&task_id)
+            .map(|handle| {
+                handle.abort();
+            })
+            .is_some()
+    }
+
+    pub fn clear_task_abort(&self, task_id: Uuid) {
+        self.active_runs.lock().unwrap().remove(&task_id);
     }
 
     pub async fn close(self) {

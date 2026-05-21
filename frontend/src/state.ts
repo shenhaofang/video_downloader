@@ -8,6 +8,7 @@ export type TaskState =
   | "merging"
   | "completed"
   | "failed"
+  | "paused"
   | "interrupted"
   | "cancelled";
 
@@ -41,6 +42,8 @@ export interface DownloadTask {
   bytes_total: number | null;
   retry_count: number;
   max_retries: number;
+  error_code?: string | null;
+  error_message?: string | null;
   quality: string | null;
   used_login: boolean;
   engine: Engine;

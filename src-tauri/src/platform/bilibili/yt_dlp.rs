@@ -1,4 +1,5 @@
 use crate::errors::{AppError, AppResult, ErrorCode};
+use crate::media::async_external_command;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +60,7 @@ pub fn ytdlp_download_args(
 }
 
 pub async fn run_ytdlp(path: &Path, args: &[String]) -> AppResult<String> {
-    let output = tokio::process::Command::new(path)
+    let output = async_external_command(path)
         .args(args)
         .output()
         .await

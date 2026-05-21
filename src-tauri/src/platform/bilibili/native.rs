@@ -245,12 +245,13 @@ impl PlatformDownloader for NativeBilibiliDownloader {
                 .await?;
 
                 sink.emit(crate::platform::DownloadEvent::State("merging".into()));
-                crate::media::merge_with_ffmpeg(
+                crate::media::merge_with_ffmpeg_async(
                     ffmpeg_path,
                     &video_path,
                     &audio_path,
                     &output_path,
-                )?;
+                )
+                .await?;
 
                 Ok::<_, AppError>(DownloadOutput {
                     output_path: input.output_path,

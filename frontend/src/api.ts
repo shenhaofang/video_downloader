@@ -108,7 +108,7 @@ export async function installYtDlp(): Promise<AppSettings> {
     if (isTauriUnavailable(error)) {
       return {
         ...fallbackConfig(),
-        ytdlpPath: "D:\\Tools\\yt-dlp.exe",
+        ytdlpPath: "C:\\Program Files\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe",
       };
     }
     throw error;
@@ -171,12 +171,44 @@ export async function listTaskGroups(): Promise<CreatedTaskGroup[]> {
 }
 
 export async function runTask(input: RunTaskInput) {
+  return taskCommand("run_task", input, "completed");
+}
+
+export async function startTask(input: RunTaskInput) {
+  return taskCommand("start_task", input, "completed");
+}
+
+export async function retryTask(input: RunTaskInput) {
+  return taskCommand("retry_task", input, "completed");
+}
+
+export async function pauseTask(input: RunTaskInput) {
+  return taskCommand("pause_task", input, "paused");
+}
+
+export async function deleteTask(input: RunTaskInput): Promise<CreatedTaskGroup[]> {
   try {
-    const result = await invoke<CreatedTaskGroup["tasks"][number]>("run_task", { input });
+    const result = await invoke<CreatedTaskGroup[]>("delete_task", { input });
+    return result.map(normalizeCreatedTaskGroup);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function taskCommand(
+  command: string,
+  input: RunTaskInput,
+  fallbackState: CreatedTaskGroup["tasks"][number]["state"],
+) {
+  try {
+    const result = await invoke<CreatedTaskGroup["tasks"][number]>(command, { input });
     return normalizeTask(result);
   } catch (error) {
     if (isTauriUnavailable(error)) {
-      return fallbackRunTask(input.task_id);
+      return fallbackRunTask(input.task_id, fallbackState);
     }
     throw error;
   }
@@ -337,10 +369,15 @@ function fallbackTask(id: string, title: string, outputFile: string, progress: n
   };
 }
 
-function fallbackRunTask(taskId: string) {
+function fallbackRunTask(
+  taskId: string,
+  state: CreatedTaskGroup["tasks"][number]["state"] = "completed",
+) {
   return {
     ...fallbackTask(taskId, "本地预览任务", `D:\\Videos\\bilibili\\${taskId}.mp4`, 100),
-    state: "completed" as const,
+    state,
+    bytes_downloaded: state === "paused" ? 0 : 100,
+    bytes_total: state === "paused" ? null : 100,
   };
 }
 

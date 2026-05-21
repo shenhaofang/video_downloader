@@ -8,7 +8,8 @@ archive under `resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip`. The Windows
 NSIS installer bundles that archive into the setup executable, verifies its
 SHA256 checksum during installation, and extracts the tools to:
 
-`resources\media-tools\ffmpeg\bin\`
+`dependencies\ffmpeg\bin\`
 
-The app checks that installer-managed location when the user has not configured
-custom media tool paths in Settings.
+The `dependencies` directory is created directly under the program installation
+root. The app checks that installer-managed location when the user has not
+configured custom media tool paths in Settings.

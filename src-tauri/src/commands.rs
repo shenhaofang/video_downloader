@@ -4,13 +4,15 @@ use crate::auth::bilibili::{
     LoginQr,
 };
 use crate::errors::{AppError, AppResult, ErrorCode};
-use crate::models::{AppConfig, DownloadEngine};
+use crate::models::{AppConfig, DownloadEngine, DownloadTask, TaskState};
 use crate::platform::bilibili::native::NativeBilibiliDownloader;
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
 use crate::platform::{PlatformDownloader, ProbeInput, ProbeResult};
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
+use futures_util::future::{AbortHandle, Abortable};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const YTDLP_DOWNLOAD_URL: &str =
@@ -98,6 +100,38 @@ pub async fn run_task(
 }
 
 #[tauri::command]
+pub async fn start_task(
+    state: tauri::State<'_, AppState>,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    start_task_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
+pub async fn retry_task(
+    state: tauri::State<'_, AppState>,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    retry_task_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
+pub async fn pause_task(
+    state: tauri::State<'_, AppState>,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    pause_task_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
+pub async fn delete_task(
+    state: tauri::State<'_, AppState>,
+    input: RunTaskCommand,
+) -> AppResult<Vec<CreatedTaskGroup>> {
+    delete_task_from_state(state.inner(), input).await
+}
+
+#[tauri::command]
 pub async fn list_platform_logins(
     state: tauri::State<'_, AppState>,
 ) -> AppResult<Vec<PlatformLoginRow>> {
@@ -133,13 +167,36 @@ pub async fn install_ytdlp(state: tauri::State<'_, AppState>) -> AppResult<AppCo
 }
 
 async fn get_config_from_state(state: &AppState) -> AppResult<AppConfig> {
-    state.storage.load_config().await
+    let config = state.storage.load_config().await?;
+    config_with_installer_managed_tool_defaults(config)
 }
 
 async fn save_config_from_state(state: &AppState, input: AppConfig) -> AppResult<AppConfig> {
     let config = crate::config::with_normalized_concurrency(input);
+    let config = config_with_installer_managed_tool_defaults(config)?;
     state.storage.save_config(&config).await?;
     Ok(config)
+}
+
+fn config_with_installer_managed_tool_defaults(mut config: AppConfig) -> AppResult<AppConfig> {
+    config.ytdlp_path = Some(existing_or_default_tool_path(
+        config.ytdlp_path,
+        crate::media::installer_managed_ytdlp_path()?,
+    ));
+    config.ffmpeg_path = Some(existing_or_default_tool_path(
+        config.ffmpeg_path,
+        crate::media::installer_managed_media_tool_path("ffmpeg")?,
+    ));
+    config.ffprobe_path = Some(existing_or_default_tool_path(
+        config.ffprobe_path,
+        crate::media::installer_managed_media_tool_path("ffprobe")?,
+    ));
+    Ok(config)
+}
+
+fn existing_or_default_tool_path(path: Option<String>, default_path: PathBuf) -> String {
+    path.filter(|value| Path::new(value).is_file())
+        .unwrap_or_else(|| default_path.to_string_lossy().to_string())
 }
 
 async fn install_ytdlp_from_state(state: &AppState) -> AppResult<AppConfig> {
@@ -177,6 +234,19 @@ async fn download_ytdlp_bytes(url: &str) -> AppResult<Vec<u8>> {
 }
 
 async fn install_ytdlp_bytes_from_state(state: &AppState, bytes: Vec<u8>) -> AppResult<AppConfig> {
+    install_ytdlp_bytes_to_path_from_state(
+        state,
+        bytes,
+        crate::media::installer_managed_ytdlp_path()?,
+    )
+    .await
+}
+
+async fn install_ytdlp_bytes_to_path_from_state(
+    state: &AppState,
+    bytes: Vec<u8>,
+    path: PathBuf,
+) -> AppResult<AppConfig> {
     if bytes.is_empty() {
         return Err(AppError::structured(
             ErrorCode::NetworkError,
@@ -184,16 +254,21 @@ async fn install_ytdlp_bytes_from_state(state: &AppState, bytes: Vec<u8>) -> App
         ));
     }
 
-    let install_dir = state.data_dir().join("tools").join("yt-dlp");
-    std::fs::create_dir_all(&install_dir)
+    let install_dir = path.parent().ok_or_else(|| {
+        AppError::structured(
+            ErrorCode::FilesystemError,
+            "yt-dlp install path has no parent directory",
+        )
+    })?;
+    std::fs::create_dir_all(install_dir)
         .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
-    let path = install_dir.join("yt-dlp.exe");
     std::fs::write(&path, bytes)
         .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
 
     let mut config = state.storage.load_config().await?;
     config.ytdlp_path = Some(path.to_string_lossy().to_string());
     let config = crate::config::with_normalized_concurrency(config);
+    let config = config_with_installer_managed_tool_defaults(config)?;
     state.storage.save_config(&config).await?;
     Ok(config)
 }
@@ -280,7 +355,70 @@ async fn run_task_from_state(
     state: &AppState,
     input: RunTaskCommand,
 ) -> AppResult<crate::models::DownloadTask> {
+    run_task_from_state_mode(state, input, false).await
+}
+
+async fn start_task_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    run_task_from_state_mode(state, input, true).await
+}
+
+async fn retry_task_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    let mut task = load_task_from_command(state, &input).await?;
+    task.state = TaskState::Queued;
+    task.bytes_downloaded = 0;
+    task.bytes_total = None;
+    task.error_code = None;
+    task.error_message = None;
+    state.storage.update_task(&task).await?;
+    run_task_from_state_mode(state, input, true).await
+}
+
+async fn pause_task_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+) -> AppResult<crate::models::DownloadTask> {
+    let mut task = load_task_from_command(state, &input).await?;
+    state.abort_task(task.id);
+    if matches!(
+        task.state,
+        TaskState::Pending
+            | TaskState::Probing
+            | TaskState::Queued
+            | TaskState::Downloading
+            | TaskState::Merging
+            | TaskState::Interrupted
+    ) {
+        task.state = TaskState::Paused;
+        state.storage.update_task(&task).await?;
+    }
+    Ok(task)
+}
+
+async fn delete_task_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+) -> AppResult<Vec<CreatedTaskGroup>> {
     let task = load_task_from_command(state, &input).await?;
+    state.abort_task(task.id);
+    state.storage.delete_task(task.id).await?;
+    list_task_groups_from_state(state).await
+}
+
+async fn run_task_from_state_mode(
+    state: &AppState,
+    input: RunTaskCommand,
+    allow_paused: bool,
+) -> AppResult<crate::models::DownloadTask> {
+    let task = load_task_from_command(state, &input).await?;
+    if !should_run_task(&task, allow_paused) {
+        return Ok(task);
+    }
     match task.engine {
         DownloadEngine::Native => {
             let config = state.storage.load_config().await?;
@@ -289,7 +427,7 @@ async fn run_task_from_state(
                 "ffmpeg",
             )?;
             let downloader = NativeBilibiliDownloader::with_ffmpeg_path(ffmpeg_path);
-            run_task_with_downloader_from_state(state, input, &downloader).await
+            run_task_with_downloader_from_state_mode(state, input, &downloader, allow_paused).await
         }
         DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
             crate::errors::ErrorCode::EngineMissing,
@@ -298,13 +436,76 @@ async fn run_task_from_state(
     }
 }
 
+#[cfg(test)]
 async fn run_task_with_downloader_from_state(
     state: &AppState,
     input: RunTaskCommand,
     downloader: &dyn PlatformDownloader,
 ) -> AppResult<crate::models::DownloadTask> {
+    run_task_with_downloader_from_state_mode(state, input, downloader, false).await
+}
+
+#[cfg(test)]
+async fn start_task_with_downloader_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+    downloader: &dyn PlatformDownloader,
+) -> AppResult<crate::models::DownloadTask> {
+    run_task_with_downloader_from_state_mode(state, input, downloader, true).await
+}
+
+#[cfg(test)]
+async fn retry_task_with_downloader_from_state(
+    state: &AppState,
+    input: RunTaskCommand,
+    downloader: &dyn PlatformDownloader,
+) -> AppResult<crate::models::DownloadTask> {
+    let mut task = load_task_from_command(state, &input).await?;
+    task.state = TaskState::Queued;
+    task.bytes_downloaded = 0;
+    task.bytes_total = None;
+    task.error_code = None;
+    task.error_message = None;
+    state.storage.update_task(&task).await?;
+    run_task_with_downloader_from_state_mode(state, input, downloader, false).await
+}
+
+async fn run_task_with_downloader_from_state_mode(
+    state: &AppState,
+    input: RunTaskCommand,
+    downloader: &dyn PlatformDownloader,
+    allow_paused: bool,
+) -> AppResult<crate::models::DownloadTask> {
     let task = load_task_from_command(state, &input).await?;
-    crate::task::executor::run_task_once(&state.storage, task, downloader).await
+    if !should_run_task(&task, allow_paused) {
+        return Ok(task);
+    }
+
+    let task_id = task.id;
+    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+    if !state.register_task_abort(task_id, abort_handle) {
+        return state.storage.load_task(task_id).await;
+    }
+    let result = Abortable::new(
+        crate::task::executor::run_task_once(&state.storage, task, downloader),
+        abort_registration,
+    )
+    .await;
+    state.clear_task_abort(task_id);
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            let mut paused = state.storage.load_task(task_id).await?;
+            paused.state = TaskState::Paused;
+            state.storage.update_task(&paused).await?;
+            Ok(paused)
+        }
+    }
+}
+
+fn should_run_task(task: &DownloadTask, allow_paused: bool) -> bool {
+    matches!(task.state, TaskState::Queued | TaskState::Interrupted)
+        || (allow_paused && matches!(task.state, TaskState::Paused))
 }
 
 async fn load_task_from_command(
@@ -609,6 +810,198 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_run_skips_paused_task_until_manually_started() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let mut task = created.tasks[0].clone();
+        task.state = crate::models::TaskState::Paused;
+        state.storage.update_task(&task).await.unwrap();
+        let downloader = CommandRunDownloader::default();
+
+        let automatic = run_task_with_downloader_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+            &downloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(automatic.state, crate::models::TaskState::Paused);
+        assert!(downloader.input().is_none());
+
+        let manual = start_task_with_downloader_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+            &downloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(manual.state, crate::models::TaskState::Completed);
+        assert!(downloader.input().is_some());
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn start_task_does_not_duplicate_an_active_run() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+        let (abort_handle, _abort_registration) = AbortHandle::new_pair();
+        assert!(state.register_task_abort(task.id, abort_handle));
+        let downloader = CommandRunDownloader::default();
+
+        let started = start_task_with_downloader_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+            &downloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(started.id, task.id);
+        assert!(downloader.input().is_none());
+        state.clear_task_abort(task.id);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn pause_task_from_state_marks_task_paused() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+
+        let paused = pause_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(paused.state, crate::models::TaskState::Paused);
+        assert_eq!(
+            state.storage.load_task(task.id).await.unwrap().state,
+            crate::models::TaskState::Paused
+        );
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn retry_task_clears_error_and_runs_failed_task() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let mut task = created.tasks[0].clone();
+        task.state = crate::models::TaskState::Failed;
+        task.error_code = Some("network_error".into());
+        task.error_message = Some("download failed".into());
+        state.storage.update_task(&task).await.unwrap();
+        let downloader = CommandRunDownloader::default();
+
+        let retried = retry_task_with_downloader_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+            &downloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(retried.state, crate::models::TaskState::Completed);
+        assert_eq!(retried.error_code, None);
+        assert_eq!(retried.error_message, None);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn delete_task_from_state_removes_single_child_and_empty_group() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+
+        let groups = delete_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(groups.is_empty());
+        assert!(state.storage.load_task_groups().await.unwrap().is_empty());
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
     async fn run_task_from_state_persists_missing_ffmpeg_failure_for_native_task() {
         let state = command_test_state().await;
         let created = create_task_with_downloader_from_state(
@@ -712,19 +1105,66 @@ mod tests {
     #[tokio::test]
     async fn get_config_reads_persisted_config_from_app_state() {
         let state = command_test_state().await;
+        let tool_dir =
+            std::env::temp_dir().join(format!("vd-config-tools-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tool_dir).unwrap();
+        let ytdlp = tool_dir.join("yt-dlp.exe");
+        let ffmpeg = tool_dir.join("ffmpeg.exe");
+        let ffprobe = tool_dir.join("ffprobe.exe");
+        fs::write(&ytdlp, b"test binary").unwrap();
+        fs::write(&ffmpeg, b"test binary").unwrap();
+        fs::write(&ffprobe, b"test binary").unwrap();
         let config = AppConfig {
             download_root: "E:\\Videos".into(),
             concurrency: 5,
             default_engine: DownloadEngine::YtDlp,
-            ytdlp_path: Some("C:\\tools\\yt-dlp.exe".into()),
-            ffmpeg_path: Some("C:\\tools\\ffmpeg.exe".into()),
-            ffprobe_path: Some("C:\\tools\\ffprobe.exe".into()),
+            ytdlp_path: Some(ytdlp.to_string_lossy().to_string()),
+            ffmpeg_path: Some(ffmpeg.to_string_lossy().to_string()),
+            ffprobe_path: Some(ffprobe.to_string_lossy().to_string()),
         };
         state.storage.save_config(&config).await.unwrap();
 
         let loaded = get_config_from_state(&state).await.unwrap();
 
         assert_eq!(loaded, config);
+        cleanup_state(state).await;
+        fs::remove_dir_all(tool_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_config_replaces_missing_tool_paths_with_installer_managed_defaults() {
+        let state = command_test_state().await;
+        let config = AppConfig {
+            ytdlp_path: Some("C:\\tools\\yt-dlp.exe".into()),
+            ffmpeg_path: Some("C:\\tools\\ffmpeg.exe".into()),
+            ffprobe_path: Some("C:\\tools\\ffprobe.exe".into()),
+            ..AppConfig::default()
+        };
+        state.storage.save_config(&config).await.unwrap();
+
+        let loaded = get_config_from_state(&state).await.unwrap();
+
+        assert_ne!(loaded.ytdlp_path.as_deref(), Some("C:\\tools\\yt-dlp.exe"));
+        assert_ne!(loaded.ffmpeg_path.as_deref(), Some("C:\\tools\\ffmpeg.exe"));
+        assert_ne!(
+            loaded.ffprobe_path.as_deref(),
+            Some("C:\\tools\\ffprobe.exe")
+        );
+        assert!(loaded
+            .ytdlp_path
+            .as_deref()
+            .unwrap()
+            .ends_with("dependencies\\yt-dlp\\yt-dlp.exe"));
+        assert!(loaded
+            .ffmpeg_path
+            .as_deref()
+            .unwrap()
+            .ends_with("dependencies\\ffmpeg\\bin\\ffmpeg.exe"));
+        assert!(loaded
+            .ffprobe_path
+            .as_deref()
+            .unwrap()
+            .ends_with("dependencies\\ffmpeg\\bin\\ffprobe.exe"));
         cleanup_state(state).await;
     }
 
@@ -791,21 +1231,24 @@ mod tests {
     #[tokio::test]
     async fn install_ytdlp_bytes_from_state_writes_binary_and_persists_path() {
         let state = command_test_state().await;
-
-        let saved = install_ytdlp_bytes_from_state(&state, b"yt-dlp binary".to_vec())
-            .await
-            .unwrap();
-
-        let path = state
-            .data_dir()
-            .join("tools")
+        let install_root =
+            std::env::temp_dir().join(format!("vd-ytdlp-install-{}", uuid::Uuid::new_v4()));
+        let path = install_root
+            .join("dependencies")
             .join("yt-dlp")
             .join("yt-dlp.exe");
+
+        let saved =
+            install_ytdlp_bytes_to_path_from_state(&state, b"yt-dlp binary".to_vec(), path.clone())
+                .await
+                .unwrap();
+
         assert_eq!(saved.ytdlp_path, Some(path.to_string_lossy().to_string()));
         assert_eq!(fs::read(&path).unwrap(), b"yt-dlp binary");
         let status = get_tool_status_from_state(&state).await.unwrap();
         assert_eq!(status.ytdlp, "available");
         cleanup_state(state).await;
+        fs::remove_dir_all(install_root).unwrap();
     }
 
     #[tokio::test]

@@ -6,12 +6,16 @@ import {
   getToolStatus,
   installYtDlp,
   listTaskGroups,
+  deleteTask,
+  pauseTask,
   pollBilibiliLogin,
   probeBilibiliPages,
+  retryTask,
   runTask,
   saveConfig,
   selectOutputDirectory,
   startBilibiliLogin,
+  startTask,
 } from "./api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
@@ -82,6 +86,78 @@ describe("api fallback detection", () => {
       engine: "yt-dlp",
     });
     expect(invokeMock).toHaveBeenCalledWith("run_task", { input: { task_id: "task-1" } });
+  });
+
+  test("controls child tasks through Tauri commands", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock
+      .mockResolvedValueOnce({
+        id: "task-1",
+        title: "安装 Tauri",
+        output_file: "D:\\Videos\\out.mp4",
+        state: "paused",
+        bytes_downloaded: 0,
+        bytes_total: null,
+        retry_count: 0,
+        max_retries: 3,
+        quality: "720P",
+        used_login: false,
+        engine: "native",
+      })
+      .mockResolvedValueOnce({
+        id: "task-1",
+        title: "安装 Tauri",
+        output_file: "D:\\Videos\\out.mp4",
+        state: "completed",
+        bytes_downloaded: 9,
+        bytes_total: 9,
+        retry_count: 0,
+        max_retries: 3,
+        quality: "720P",
+        used_login: false,
+        engine: "native",
+      })
+      .mockResolvedValueOnce({
+        id: "task-1",
+        title: "安装 Tauri",
+        output_file: "D:\\Videos\\out.mp4",
+        state: "completed",
+        bytes_downloaded: 9,
+        bytes_total: 9,
+        retry_count: 0,
+        max_retries: 3,
+        quality: "720P",
+        used_login: false,
+        engine: "native",
+      })
+      .mockResolvedValueOnce([]);
+
+    await expect(pauseTask({ task_id: "task-1" })).resolves.toMatchObject({
+      id: "task-1",
+      state: "paused",
+    });
+    await expect(startTask({ task_id: "task-1" })).resolves.toMatchObject({
+      id: "task-1",
+      state: "completed",
+    });
+    await expect(retryTask({ task_id: "task-1" })).resolves.toMatchObject({
+      id: "task-1",
+      state: "completed",
+    });
+    await expect(deleteTask({ task_id: "task-1" })).resolves.toEqual([]);
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "pause_task", {
+      input: { task_id: "task-1" },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "start_task", {
+      input: { task_id: "task-1" },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "retry_task", {
+      input: { task_id: "task-1" },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "delete_task", {
+      input: { task_id: "task-1" },
+    });
   });
 
   test("creates task with selected pages when provided", async () => {
@@ -305,13 +381,13 @@ describe("api fallback detection", () => {
       download_root: "D:\\Videos",
       concurrency: 2,
       default_engine: "native",
-      ytdlp_path: "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      ytdlp_path: "C:\\Program Files\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe",
       ffmpeg_path: null,
       ffprobe_path: null,
     });
 
     await expect(installYtDlp()).resolves.toMatchObject({
-      ytdlpPath: "C:\\Users\\me\\AppData\\Video Downloader\\tools\\yt-dlp\\yt-dlp.exe",
+      ytdlpPath: "C:\\Program Files\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe",
       defaultEngine: "native",
     });
     expect(invokeMock).toHaveBeenCalledWith("install_ytdlp");

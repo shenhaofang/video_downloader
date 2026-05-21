@@ -4,12 +4,16 @@ import {
   getToolStatus as defaultGetToolStatus,
   installYtDlp as defaultInstallYtDlp,
   listTaskGroups as defaultListTaskGroups,
+  deleteTask as defaultDeleteTask,
+  pauseTask as defaultPauseTask,
   pollBilibiliLogin as defaultPollBilibiliLogin,
   probeBilibiliPages as defaultProbeBilibiliPages,
+  retryTask as defaultRetryTask,
   runTask as defaultRunTask,
   saveConfig as defaultSaveConfig,
   selectOutputDirectory as defaultSelectOutputDirectory,
   startBilibiliLogin as defaultStartBilibiliLogin,
+  startTask as defaultStartTask,
 } from "./api";
 import {
   platformRowText,
@@ -28,6 +32,10 @@ import { createQrDataUrl as defaultCreateQrDataUrl } from "./qr";
 export interface RenderDependencies {
   createTask?: typeof defaultCreateTask;
   runTask?: typeof defaultRunTask;
+  startTask?: typeof defaultStartTask;
+  retryTask?: typeof defaultRetryTask;
+  pauseTask?: typeof defaultPauseTask;
+  deleteTask?: typeof defaultDeleteTask;
   selectOutputDirectory?: typeof defaultSelectOutputDirectory;
   saveConfig?: typeof defaultSaveConfig;
   startBilibiliLogin?: typeof defaultStartBilibiliLogin;
@@ -42,6 +50,8 @@ export interface RenderDependencies {
   createQrDataUrl?: typeof defaultCreateQrDataUrl;
 }
 
+type TaskRunner = typeof defaultRunTask;
+
 export function renderApp(
   root: HTMLElement,
   state: AppState,
@@ -49,6 +59,10 @@ export function renderApp(
 ): void {
   const createTask = dependencies.createTask ?? defaultCreateTask;
   const runTask = dependencies.runTask ?? defaultRunTask;
+  const startTask = dependencies.startTask ?? defaultStartTask;
+  const retryTask = dependencies.retryTask ?? defaultRetryTask;
+  const pauseTask = dependencies.pauseTask ?? defaultPauseTask;
+  const deleteTask = dependencies.deleteTask ?? defaultDeleteTask;
   const selectOutputDirectory =
     dependencies.selectOutputDirectory ?? defaultSelectOutputDirectory;
   const saveConfig = dependencies.saveConfig ?? defaultSaveConfig;
@@ -66,6 +80,10 @@ export function renderApp(
     buildAppShell(root, state, {
       createTask,
       runTask,
+      startTask,
+      retryTask,
+      pauseTask,
+      deleteTask,
       selectOutputDirectory,
       saveConfig,
       startBilibiliLogin,
@@ -155,7 +173,7 @@ function buildDownloadsPanel(
   const pagePreview = element("div", "page-preview-host");
   renderPagePreview(pagePreview, state);
   const taskList = element("div", "task-list");
-  renderTaskList(taskList, state);
+  renderTaskList(taskList, state, dependencies);
 
   probeButton.addEventListener("click", async () => {
     const url = readInput(form, "video-url");
@@ -224,7 +242,7 @@ function buildDownloadsPanel(
       state.pagePreview = emptyPagePreviewState();
       renderPagePreview(pagePreview, state);
     }
-    renderTaskList(taskList, state);
+    renderTaskList(taskList, state, dependencies);
     await runTasksWithConcurrency(state, taskList, created.tasks, dependencies);
   });
 
@@ -237,6 +255,7 @@ async function runTasksWithConcurrency(
   taskList: HTMLElement,
   tasks: DownloadTask[],
   dependencies: Required<RenderDependencies>,
+  taskRunnerForTask: (task: DownloadTask) => TaskRunner = () => dependencies.runTask,
 ): Promise<void> {
   let nextTaskIndex = 0;
   const workerCount = Math.min(tasks.length, Math.max(1, state.settings.concurrency));
@@ -246,18 +265,15 @@ async function runTasksWithConcurrency(
       nextTaskIndex += 1;
       try {
         const updated = await runTaskWithProgressPolling(state, taskList, task.id, {
-          runTask: dependencies.runTask,
-          listTaskGroups: dependencies.listTaskGroups,
-          progressPollMs: dependencies.progressPollMs,
+          dependencies,
+          taskRunner: taskRunnerForTask(task),
         });
         replaceTask(state, updated);
       } catch (error) {
         console.error("Failed to run task", error);
-        await refreshPersistedTaskGroups(state, taskList, {
-          listTaskGroups: dependencies.listTaskGroups,
-        });
+        await refreshPersistedTaskGroups(state, taskList, dependencies);
       }
-      renderTaskList(taskList, state);
+      renderTaskList(taskList, state, dependencies);
     }
   });
 
@@ -268,8 +284,12 @@ async function runTaskWithProgressPolling(
   state: AppState,
   taskList: HTMLElement,
   taskId: string,
-  dependencies: Pick<Required<RenderDependencies>, "runTask" | "listTaskGroups" | "progressPollMs">,
+  options: {
+    dependencies: Required<RenderDependencies>;
+    taskRunner: TaskRunner;
+  },
 ): Promise<DownloadTask> {
+  const { dependencies, taskRunner } = options;
   let isPolling = false;
   const intervalId = window.setInterval(async () => {
     if (isPolling) {
@@ -286,7 +306,7 @@ async function runTaskWithProgressPolling(
   }, dependencies.progressPollMs);
 
   try {
-    return await dependencies.runTask({ task_id: taskId });
+    return await taskRunner({ task_id: taskId });
   } finally {
     window.clearInterval(intervalId);
   }
@@ -295,11 +315,11 @@ async function runTaskWithProgressPolling(
 async function refreshPersistedTaskGroups(
   state: AppState,
   taskList: HTMLElement,
-  dependencies: Pick<Required<RenderDependencies>, "listTaskGroups">,
+  dependencies: Required<RenderDependencies>,
 ): Promise<void> {
   const persistedGroups = await dependencies.listTaskGroups();
   mergePersistedTaskGroups(state, persistedGroups);
-  renderTaskList(taskList, state);
+  renderTaskList(taskList, state, dependencies);
 }
 
 function mergePersistedTaskGroups(state: AppState, persistedGroups: CreatedTaskGroup[]): void {
@@ -312,8 +332,14 @@ function mergePersistedTaskGroups(state: AppState, persistedGroups: CreatedTaskG
   );
 }
 
-function renderTaskList(taskList: HTMLElement, state: AppState): void {
-  taskList.replaceChildren(...state.taskGroups.map(buildTaskGroupCard));
+function renderTaskList(
+  taskList: HTMLElement,
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): void {
+  taskList.replaceChildren(
+    ...state.taskGroups.map((group) => buildTaskGroupCard(group, state, taskList, dependencies)),
+  );
 }
 
 function replaceTask(state: AppState, updated: DownloadTask): void {
@@ -527,7 +553,12 @@ function lastSelectedOrLastPage(items: ProbePageItem[], selectedPages: Set<numbe
   return selectedItems[selectedItems.length - 1]?.page ?? items[items.length - 1]?.page ?? 1;
 }
 
-function buildTaskGroupCard(created: CreatedTaskGroup): HTMLElement {
+function buildTaskGroupCard(
+  created: CreatedTaskGroup,
+  state: AppState,
+  taskList: HTMLElement,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
   const card = element("article", "task-card");
   const details = document.createElement("details");
   details.open = true;
@@ -538,23 +569,203 @@ function buildTaskGroupCard(created: CreatedTaskGroup): HTMLElement {
     element("span", "", created.group.output_dir),
     element("span", "state-pill", stateLabel(taskGroupState(created))),
   );
+  summary.append(buildTaskGroupActions(created, state, taskList, dependencies));
   const children = element("div", "child-task-list");
-  children.append(...created.tasks.map(buildChildTask));
+  children.append(
+    ...created.tasks.map((task) => buildChildTask(task, state, taskList, dependencies)),
+  );
   details.append(summary, children);
   card.append(details);
   return card;
 }
 
-function buildChildTask(task: DownloadTask): HTMLElement {
+function buildTaskGroupActions(
+  created: CreatedTaskGroup,
+  state: AppState,
+  taskList: HTMLElement,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
+  const actions = element("div", "task-group-actions");
+  const continuable = continuableTasks(created.tasks);
+  if (continuable.length > 0) {
+    const button = element("button", "secondary compact", "继续") as HTMLButtonElement;
+    button.type = "button";
+    button.dataset.testid = `continue-group-${created.group.id}`;
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      button.disabled = true;
+      try {
+        await runTasksWithConcurrency(state, taskList, continuable, dependencies, (task) =>
+          task.state === "failed" ? dependencies.retryTask : dependencies.startTask,
+        );
+      } catch (error) {
+        console.error("Failed to continue task group", error);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    actions.append(button);
+  }
+
+  const pausable = pausableTasks(created.tasks);
+  if (pausable.length > 0) {
+    const pause = element("button", "secondary compact", "暂停") as HTMLButtonElement;
+    pause.type = "button";
+    pause.dataset.testid = `pause-group-${created.group.id}`;
+    pause.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      pause.disabled = true;
+      try {
+        for (const task of pausable) {
+          const updated = await dependencies.pauseTask({ task_id: task.id });
+          replaceTask(state, updated);
+        }
+        renderTaskList(taskList, state, dependencies);
+      } catch (error) {
+        console.error("Failed to pause task group", error);
+        pause.disabled = false;
+      }
+    });
+    actions.append(pause);
+  }
+
+  const remove = element("button", "secondary compact", "删除") as HTMLButtonElement;
+  remove.type = "button";
+  remove.dataset.testid = `delete-group-${created.group.id}`;
+  remove.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    remove.disabled = true;
+    try {
+      let groups = state.taskGroups;
+      for (const task of created.tasks) {
+        groups = await dependencies.deleteTask({ task_id: task.id });
+      }
+      state.taskGroups = groups;
+      renderTaskList(taskList, state, dependencies);
+    } catch (error) {
+      console.error("Failed to delete task group", error);
+      remove.disabled = false;
+    }
+  });
+  actions.append(remove);
+  return actions;
+}
+
+function continuableTasks(tasks: DownloadTask[]): DownloadTask[] {
+  return tasks.filter((task) =>
+    ["queued", "paused", "interrupted", "failed"].includes(task.state),
+  );
+}
+
+function pausableTasks(tasks: DownloadTask[]): DownloadTask[] {
+  return tasks.filter((task) =>
+    ["pending", "probing", "queued", "downloading", "merging", "interrupted"].includes(task.state),
+  );
+}
+
+function buildChildTask(
+  task: DownloadTask,
+  state: AppState,
+  taskList: HTMLElement,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
   const row = element("div", "child-task");
   row.append(
     element("div", "child-title", task.title),
     element("div", "child-file", fileName(task.output_file)),
+    element("div", "child-state", stateLabel(task.state)),
     element("div", "child-progress", progressText(task)),
     element("div", "child-retry", `重试 ${task.retry_count}/${task.max_retries}`),
     element("div", "child-meta", `${task.quality ?? "自动"} · ${task.engine}`),
+    buildChildActions(task, state, taskList, dependencies),
   );
+  if (task.error_message) {
+    row.append(element("div", "child-error", `失败原因：${task.error_message}`));
+  }
   return row;
+}
+
+function buildChildActions(
+  task: DownloadTask,
+  state: AppState,
+  taskList: HTMLElement,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
+  const actions = element("div", "child-actions");
+  const start = childActionButton("开始", `start-task-${task.id}`, async () => {
+    await runChildTask(task.id, state, taskList, dependencies, dependencies.startTask);
+  });
+  start.disabled = !["queued", "paused", "interrupted"].includes(task.state);
+
+  const pause = childActionButton("暂停", `pause-task-${task.id}`, async () => {
+    const updated = await dependencies.pauseTask({ task_id: task.id });
+    replaceTask(state, updated);
+    renderTaskList(taskList, state, dependencies);
+  });
+  pause.disabled = ![
+    "pending",
+    "probing",
+    "queued",
+    "downloading",
+    "merging",
+    "interrupted",
+  ].includes(task.state);
+
+  const retry = childActionButton("重试", `retry-task-${task.id}`, async () => {
+    await runChildTask(task.id, state, taskList, dependencies, dependencies.retryTask);
+  });
+  retry.disabled = task.state !== "failed";
+
+  const remove = childActionButton("删除", `delete-task-${task.id}`, async () => {
+    state.taskGroups = await dependencies.deleteTask({ task_id: task.id });
+    renderTaskList(taskList, state, dependencies);
+  });
+
+  actions.append(start, pause, retry, remove);
+  return actions;
+}
+
+function childActionButton(
+  label: string,
+  testId: string,
+  onClick: () => Promise<void>,
+): HTMLButtonElement {
+  const button = element("button", "secondary compact", label) as HTMLButtonElement;
+  button.type = "button";
+  button.dataset.testid = testId;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await onClick();
+    } catch (error) {
+      console.error(`Failed to ${label} task`, error);
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
+async function runChildTask(
+  taskId: string,
+  state: AppState,
+  taskList: HTMLElement,
+  dependencies: Required<RenderDependencies>,
+  taskRunner: TaskRunner,
+): Promise<void> {
+  try {
+    const updated = await runTaskWithProgressPolling(state, taskList, taskId, {
+      dependencies,
+      taskRunner,
+    });
+    replaceTask(state, updated);
+    renderTaskList(taskList, state, dependencies);
+  } catch (error) {
+    console.error("Failed to run child task", error);
+    await refreshPersistedTaskGroups(state, taskList, dependencies);
+  }
 }
 
 function buildLoginPanel(
@@ -807,7 +1018,7 @@ function buildSettingsPanel(
   concurrencyInput.max = "8";
   concurrencyInput.value = String(state.settings.concurrency);
 
-  const ytdlp = field("yt-dlp 路径", "ytdlp-path", "C:\\tools\\yt-dlp.exe");
+  const ytdlp = field("yt-dlp 路径", "ytdlp-path", "dependencies\\yt-dlp\\yt-dlp.exe");
   ytdlp.querySelector("input")!.value = state.settings.ytdlpPath ?? "";
   const installYtdlp = element("button", "secondary", "下载 yt-dlp");
   installYtdlp.type = "button";
@@ -825,9 +1036,9 @@ function buildSettingsPanel(
       installYtdlp.textContent = idleLabel;
     }
   });
-  const ffmpeg = field("ffmpeg 路径", "ffmpeg-path", "C:\\tools\\ffmpeg.exe");
+  const ffmpeg = field("ffmpeg 路径", "ffmpeg-path", "dependencies\\ffmpeg\\bin\\ffmpeg.exe");
   ffmpeg.querySelector("input")!.value = state.settings.ffmpegPath ?? "";
-  const ffprobe = field("ffprobe 路径", "ffprobe-path", "C:\\tools\\ffprobe.exe");
+  const ffprobe = field("ffprobe 路径", "ffprobe-path", "dependencies\\ffmpeg\\bin\\ffprobe.exe");
   ffprobe.querySelector("input")!.value = state.settings.ffprobePath ?? "";
   const toolStatus = buildToolStatusPanel(state);
 
@@ -929,6 +1140,7 @@ function stateLabel(state: string): string {
     merging: "合并中",
     completed: "已完成",
     failed: "失败",
+    paused: "已暂停",
     interrupted: "已中断",
     cancelled: "已取消",
   };
@@ -957,6 +1169,9 @@ function taskGroupState(created: CreatedTaskGroup): DownloadTask["state"] {
   }
   if (states.includes("interrupted")) {
     return "interrupted";
+  }
+  if (states.includes("paused")) {
+    return "paused";
   }
   if (states.includes("cancelled")) {
     return "cancelled";

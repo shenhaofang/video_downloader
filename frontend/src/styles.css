@@ -267,7 +267,7 @@ button {
 
 .task-group-summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 12px;
   align-items: center;
   color: #475569;
@@ -275,6 +275,13 @@ button {
 
 .task-group-summary strong {
   color: #111827;
+}
+
+.task-group-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .state-pill {
@@ -293,7 +300,7 @@ button {
 
 .child-task {
   display: grid;
-  grid-template-columns: minmax(160px, 1.2fr) minmax(160px, 1.4fr) auto auto auto;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(150px, 1.3fr) auto auto auto auto minmax(180px, auto);
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -303,7 +310,8 @@ button {
 }
 
 .child-title,
-.child-file {
+.child-file,
+.child-state {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -311,6 +319,22 @@ button {
 .child-title {
   color: #111827;
   font-weight: 600;
+}
+
+.child-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.child-actions .secondary {
+  padding: 6px 9px;
+}
+
+.child-error {
+  grid-column: 1 / -1;
+  color: #b91c1c;
 }
 
 .platform-summary {
