@@ -1195,6 +1195,55 @@ describe("renderApp", () => {
     });
   });
 
+  test("shows app update progress from update progress events", async () => {
+    const checkAppUpdate = vi.fn().mockResolvedValue({
+      available: true,
+      currentVersion: "0.1.0",
+      latestVersion: "0.1.1",
+      notes: null,
+      pubDate: null,
+    });
+    let progressHandler: (progress: {
+      downloaded: number;
+      total?: number | null;
+      percent?: number | null;
+    }) => void = () => {
+      throw new Error("progress listener was not registered");
+    };
+    const stopListening = vi.fn();
+    const listenAppUpdateProgress = vi.fn().mockImplementation((handler) => {
+      progressHandler = handler;
+      return Promise.resolve(stopListening);
+    });
+    const installAppUpdate = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 10);
+        }),
+    );
+    const state = createInitialState();
+    renderApp(root, state, { checkAppUpdate, installAppUpdate, listenAppUpdateProgress });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='check-update']")?.click();
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("发现 0.1.1");
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='install-update']")?.click();
+    await vi.waitFor(() => {
+      expect(listenAppUpdateProgress).toHaveBeenCalledOnce();
+    });
+    progressHandler({ downloaded: 512, total: 1024, percent: 50 });
+
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("更新进度 50%");
+    });
+    await vi.waitFor(() => {
+      expect(stopListening).toHaveBeenCalledOnce();
+    });
+  });
+
   test("shows structured update check errors as readable text", async () => {
     const checkAppUpdate = vi.fn().mockRejectedValue({
       code: "update_error",

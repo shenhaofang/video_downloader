@@ -1,3 +1,5 @@
+import type { AppUpdateProgress } from "./api";
+
 export type TabId = "downloads" | "login" | "settings";
 export type Engine = "native" | "yt-dlp";
 export type TaskState =
@@ -92,6 +94,7 @@ export interface AppUpdateState {
   latestVersion: string | null;
   notes: string | null;
   error: string | null;
+  progress: AppUpdateProgress | null;
 }
 
 export interface AppState {
@@ -141,10 +144,11 @@ export function createInitialState(): AppState {
     },
     update: {
       phase: "idle",
-      currentVersion: "0.1.4",
+      currentVersion: "0.1.5",
       latestVersion: null,
       notes: null,
       error: null,
+      progress: null,
     },
   };
 }

@@ -6,6 +6,7 @@ import {
   installAppUpdate as defaultInstallAppUpdate,
   installMediaTools as defaultInstallMediaTools,
   installYtDlp as defaultInstallYtDlp,
+  listenAppUpdateProgress as defaultListenAppUpdateProgress,
   listTaskGroups as defaultListTaskGroups,
   deleteTask as defaultDeleteTask,
   pauseTask as defaultPauseTask,
@@ -17,6 +18,7 @@ import {
   selectOutputDirectory as defaultSelectOutputDirectory,
   startBilibiliLogin as defaultStartBilibiliLogin,
   startTask as defaultStartTask,
+  type AppUpdateProgress,
 } from "./api";
 import {
   platformRowText,
@@ -50,6 +52,7 @@ export interface RenderDependencies {
   getToolStatus?: typeof defaultGetToolStatus;
   checkAppUpdate?: typeof defaultCheckAppUpdate;
   installAppUpdate?: typeof defaultInstallAppUpdate;
+  listenAppUpdateProgress?: typeof defaultListenAppUpdateProgress;
   listTaskGroups?: typeof defaultListTaskGroups;
   progressPollMs?: number;
   qrPollMs?: number;
@@ -81,6 +84,8 @@ export function renderApp(
   const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
   const checkAppUpdate = dependencies.checkAppUpdate ?? defaultCheckAppUpdate;
   const installAppUpdate = dependencies.installAppUpdate ?? defaultInstallAppUpdate;
+  const listenAppUpdateProgress =
+    dependencies.listenAppUpdateProgress ?? defaultListenAppUpdateProgress;
   const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
   const progressPollMs = dependencies.progressPollMs ?? 1000;
   const qrPollMs = dependencies.qrPollMs ?? 2000;
@@ -104,6 +109,7 @@ export function renderApp(
       getToolStatus,
       checkAppUpdate,
       installAppUpdate,
+      listenAppUpdateProgress,
       listTaskGroups,
       progressPollMs,
       qrPollMs,
@@ -1210,6 +1216,7 @@ function buildUpdatePanel(
       ...state.update,
       phase: "checking",
       error: null,
+      progress: null,
     };
     renderApp(root, state, dependencies);
     try {
@@ -1220,12 +1227,14 @@ function buildUpdatePanel(
         latestVersion: status.latestVersion,
         notes: status.notes,
         error: null,
+        progress: null,
       };
     } catch (error) {
       state.update = {
         ...state.update,
         phase: "error",
         error: errorMessage(error),
+        progress: null,
       };
     }
     renderApp(root, state, dependencies);
@@ -1247,17 +1256,29 @@ function buildUpdatePanel(
         ...state.update,
         phase: "installing",
         error: null,
+        progress: null,
       };
       renderApp(root, state, dependencies);
+      let stopProgressListener: (() => void) | null = null;
       try {
+        stopProgressListener = await dependencies.listenAppUpdateProgress((progress) => {
+          state.update = {
+            ...state.update,
+            progress,
+          };
+          renderApp(root, state, dependencies);
+        });
         await dependencies.installAppUpdate();
       } catch (error) {
         state.update = {
           ...state.update,
           phase: "error",
           error: errorMessage(error),
+          progress: null,
         };
         renderApp(root, state, dependencies);
+      } finally {
+        stopProgressListener?.();
       }
     });
     actions.append(install);
@@ -1295,12 +1316,62 @@ function updateMessage(state: AppState): string | null {
     return `发现 ${state.update.latestVersion ?? "新版本"}`;
   }
   if (state.update.phase === "installing") {
-    return "正在下载并安装，应用将自动重启";
+    const progress = updateProgressText(state.update.progress);
+    return progress ? `正在下载并安装，${progress}` : "正在下载并安装，应用将自动重启";
   }
   if (state.update.phase === "error") {
     return state.update.error ?? "更新失败";
   }
   return null;
+}
+
+function updateProgressText(progress: AppUpdateProgress | null): string | null {
+  if (!progress) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  const percent = updateProgressPercent(progress);
+  if (percent !== null) {
+    parts.push(`更新进度 ${percent}%`);
+  }
+
+  if (progress.total !== undefined && progress.total !== null) {
+    parts.push(`已下载 ${formatBytes(progress.downloaded)} / ${formatBytes(progress.total)}`);
+  } else {
+    parts.push(`已下载 ${formatBytes(progress.downloaded)}`);
+  }
+
+  return parts.join("，");
+}
+
+function updateProgressPercent(progress: AppUpdateProgress): number | null {
+  if (progress.percent !== undefined && progress.percent !== null) {
+    return Math.round(progress.percent);
+  }
+  if (progress.total) {
+    return Math.round((progress.downloaded / progress.total) * 100);
+  }
+  return null;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  const units = ["KB", "MB", "GB"];
+  let amount = value / 1024;
+  for (const unit of units) {
+    if (amount < 1024 || unit === units[units.length - 1]) {
+      return `${formatByteAmount(amount)} ${unit}`;
+    }
+    amount /= 1024;
+  }
+  return `${value} B`;
+}
+
+function formatByteAmount(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 function hasUnfinishedRuntimeTasks(state: AppState): boolean {

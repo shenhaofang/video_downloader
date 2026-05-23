@@ -189,9 +189,6 @@ impl PlatformDownloader for NativeBilibiliDownloader {
             let metadata = input.item.metadata.clone().ok_or_else(|| {
                 AppError::structured(ErrorCode::PlatformChanged, "missing bilibili task metadata")
             })?;
-            let ffmpeg_path = self.ffmpeg_path.as_deref().ok_or_else(|| {
-                AppError::structured(ErrorCode::FfmpegError, "ffmpeg path is not configured")
-            })?;
             let output_path = PathBuf::from(&input.output_path);
 
             sink.emit(crate::platform::DownloadEvent::State("probing".into()));
@@ -219,46 +216,90 @@ impl PlatformDownloader for NativeBilibiliDownloader {
             let temp_dir = native_download_temp_dir(&output_path, &input.task_id);
             crate::media::ensure_directory(&temp_dir)?;
             let result = async {
-                let video_path = temp_dir.join("video.part");
-                let audio_path = temp_dir.join("audio.part");
+                match selection {
+                    crate::platform::bilibili::media::PlayurlSelection::Dash(selection) => {
+                        let ffmpeg_path = self.ffmpeg_path.as_deref().ok_or_else(|| {
+                            AppError::structured(
+                                ErrorCode::FfmpegError,
+                                "ffmpeg path is not configured",
+                            )
+                        })?;
+                        let video_path = temp_dir.join("video.part");
+                        let audio_path = temp_dir.join("audio.part");
 
-                sink.emit(crate::platform::DownloadEvent::State(
-                    "downloading video".into(),
-                ));
-                let video_bytes = crate::platform::bilibili::media::download_to_file(
-                    &self.client,
-                    &selection.video.url,
-                    &video_path,
-                    sink,
-                )
-                .await?;
+                        sink.emit(crate::platform::DownloadEvent::State(
+                            "downloading video".into(),
+                        ));
+                        let video_bytes = crate::platform::bilibili::media::download_to_file(
+                            &self.client,
+                            &selection.video.url,
+                            &video_path,
+                            sink,
+                        )
+                        .await?;
 
-                sink.emit(crate::platform::DownloadEvent::State(
-                    "downloading audio".into(),
-                ));
-                let audio_bytes = crate::platform::bilibili::media::download_to_file(
-                    &self.client,
-                    &selection.audio.url,
-                    &audio_path,
-                    sink,
-                )
-                .await?;
+                        sink.emit(crate::platform::DownloadEvent::State(
+                            "downloading audio".into(),
+                        ));
+                        let audio_bytes = crate::platform::bilibili::media::download_to_file(
+                            &self.client,
+                            &selection.audio.url,
+                            &audio_path,
+                            sink,
+                        )
+                        .await?;
 
-                sink.emit(crate::platform::DownloadEvent::State("merging".into()));
-                crate::media::merge_with_ffmpeg_async(
-                    ffmpeg_path,
-                    &video_path,
-                    &audio_path,
-                    &output_path,
-                )
-                .await?;
+                        sink.emit(crate::platform::DownloadEvent::State("merging".into()));
+                        crate::media::merge_with_ffmpeg_async(
+                            ffmpeg_path,
+                            &video_path,
+                            &audio_path,
+                            &output_path,
+                        )
+                        .await?;
 
-                Ok::<_, AppError>(DownloadOutput {
-                    output_path: input.output_path,
-                    quality: Some(selection.quality),
-                    used_login: input.item.requires_login,
-                    bytes_total: Some(video_bytes + audio_bytes),
-                })
+                        Ok::<_, AppError>(DownloadOutput {
+                            output_path: input.output_path,
+                            quality: Some(selection.quality),
+                            used_login: input.item.requires_login,
+                            bytes_total: Some(video_bytes + audio_bytes),
+                        })
+                    }
+                    crate::platform::bilibili::media::PlayurlSelection::SingleFile(selection) => {
+                        let media_path = temp_dir.join("single.part");
+
+                        sink.emit(crate::platform::DownloadEvent::State("downloading".into()));
+                        let bytes = crate::platform::bilibili::media::download_to_file(
+                            &self.client,
+                            &selection.stream.url,
+                            &media_path,
+                            sink,
+                        )
+                        .await?;
+                        match tokio::fs::remove_file(&output_path).await {
+                            Ok(_) => {}
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(err) => {
+                                return Err(AppError::structured(
+                                    ErrorCode::FilesystemError,
+                                    err.to_string(),
+                                ));
+                            }
+                        }
+                        tokio::fs::rename(&media_path, &output_path)
+                            .await
+                            .map_err(|err| {
+                                AppError::structured(ErrorCode::FilesystemError, err.to_string())
+                            })?;
+
+                        Ok::<_, AppError>(DownloadOutput {
+                            output_path: input.output_path,
+                            quality: Some(selection.quality),
+                            used_login: input.item.requires_login,
+                            bytes_total: Some(bytes),
+                        })
+                    }
+                }
             }
             .await;
             if result.is_ok() {
@@ -509,7 +550,15 @@ mod tests {
 
     #[tokio::test]
     async fn download_requires_configured_ffmpeg_path() {
-        let downloader = NativeBilibiliDownloader::default();
+        let playurl = one_shot_http_url(
+            "200 OK",
+            r#"{"code":0,"message":"OK","data":{"quality":32,"dash":{"video":[{"baseUrl":"video.m4s","bandwidth":10}],"audio":[{"baseUrl":"audio.m4s","bandwidth":5}]}}}"#,
+        );
+        let downloader = NativeBilibiliDownloader::with_media_dependencies(
+            reqwest::Client::new(),
+            None,
+            playurl,
+        );
         let sink = NoopSink;
 
         let err = downloader
@@ -526,6 +575,58 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.code(), ErrorCode::FfmpegError);
+    }
+
+    #[tokio::test]
+    async fn download_single_file_durl_without_ffmpeg() {
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let media_url = one_shot_bytes_url(b"combined-media".to_vec());
+        let playurl = one_shot_http_url(
+            "200 OK",
+            &format!(
+                r#"{{"code":0,"message":"OK","data":{{"quality":32,"durl":[{{"url":"{media_url}","size":14}}]}}}}"#
+            ),
+        );
+        let output_path = dir.join("out.mp4");
+        let downloader = NativeBilibiliDownloader::with_media_dependencies(
+            reqwest::Client::new(),
+            None,
+            playurl,
+        );
+        let sink = RecordingSink::default();
+
+        let output = downloader
+            .download(
+                DownloadInput {
+                    task_id: "task-single-file".into(),
+                    source_url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                    item: bilibili_download_item(),
+                    output_path: output_path.to_string_lossy().to_string(),
+                },
+                &sink,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            output.output_path,
+            output_path.to_string_lossy().to_string()
+        );
+        assert_eq!(output.quality, Some("480P".into()));
+        assert_eq!(output.bytes_total, Some(14));
+        assert_eq!(fs::read(&output_path).unwrap(), b"combined-media");
+        assert!(!native_download_temp_dir(&output_path, "task-single-file").exists());
+        assert!(sink
+            .events()
+            .iter()
+            .any(|event| matches!(event, DownloadEvent::State(state) if state == "downloading")));
+        assert!(!sink
+            .events()
+            .iter()
+            .any(|event| matches!(event, DownloadEvent::State(state) if state == "merging")));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

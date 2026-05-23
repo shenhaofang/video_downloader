@@ -8,6 +8,7 @@ import {
   installAppUpdate,
   installMediaTools,
   installYtDlp,
+  listenAppUpdateProgress,
   listTaskGroups,
   deleteTask,
   pauseTask,
@@ -23,6 +24,7 @@ import {
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
+const eventListenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
@@ -32,10 +34,15 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: dialogOpenMock,
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: eventListenMock,
+}));
+
 describe("api fallback detection", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     dialogOpenMock.mockReset();
+    eventListenMock.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -441,5 +448,31 @@ describe("api fallback detection", () => {
 
     await expect(installAppUpdate()).resolves.toBeUndefined();
     expect(invokeMock).toHaveBeenCalledWith("install_app_update");
+  });
+
+  test("listens for app update progress through Tauri events", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    const unlisten = vi.fn();
+    eventListenMock.mockResolvedValue(unlisten);
+    const handler = vi.fn();
+
+    const stop = await listenAppUpdateProgress(handler);
+    const eventHandler = eventListenMock.mock.calls[0]?.[1];
+    eventHandler({ payload: { downloaded: 512, total: 1024, percent: 50 } });
+    stop();
+
+    expect(eventListenMock).toHaveBeenCalledWith("app-update-progress", expect.any(Function));
+    expect(handler).toHaveBeenCalledWith({ downloaded: 512, total: 1024, percent: 50 });
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  test("returns a no-op app update progress listener when Tauri is absent", async () => {
+    const handler = vi.fn();
+
+    const stop = await listenAppUpdateProgress(handler);
+    stop();
+
+    expect(eventListenMock).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
   });
 });

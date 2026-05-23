@@ -22,6 +22,19 @@ pub struct DashSelection {
     pub audio: MediaStream,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SingleFileSelection {
+    pub quality: String,
+    pub stream: MediaStream,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayurlSelection {
+    Dash(DashSelection),
+    SingleFile(SingleFileSelection),
+}
+
 #[derive(Debug, Deserialize)]
 struct PlayResponse {
     code: i32,
@@ -33,6 +46,8 @@ struct PlayResponse {
 struct PlayData {
     quality: Option<u32>,
     dash: Option<DashData>,
+    #[serde(default)]
+    durl: Vec<DurlStream>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,7 +65,24 @@ struct DashStream {
     bandwidth: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct DurlStream {
+    url: String,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
 pub fn parse_dash_selection(json: &str) -> AppResult<DashSelection> {
+    match parse_playurl_selection(json)? {
+        PlayurlSelection::Dash(selection) => Ok(selection),
+        PlayurlSelection::SingleFile(_) => Err(AppError::structured(
+            ErrorCode::UnsupportedContent,
+            "missing dash streams",
+        )),
+    }
+}
+
+pub fn parse_playurl_selection(json: &str) -> AppResult<PlayurlSelection> {
     let parsed: PlayResponse = serde_json::from_str(json)
         .map_err(|err| AppError::structured(ErrorCode::PlatformChanged, err.to_string()))?;
     if parsed.code != 0 {
@@ -62,9 +94,20 @@ pub fn parse_dash_selection(json: &str) -> AppResult<DashSelection> {
     let data = parsed
         .data
         .ok_or_else(|| AppError::structured(ErrorCode::PlatformChanged, "missing play data"))?;
-    let dash = data.dash.ok_or_else(|| {
-        AppError::structured(ErrorCode::UnsupportedContent, "missing dash streams")
-    })?;
+    let quality = quality_label(data.quality.unwrap_or(0)).to_string();
+    let durl = data.durl;
+    let dash = match data.dash {
+        Some(dash) if !dash.video.is_empty() && !dash.audio.is_empty() => dash,
+        Some(_) if !durl.is_empty() => return parse_single_file_selection(quality, durl),
+        Some(dash) => dash,
+        None if !durl.is_empty() => return parse_single_file_selection(quality, durl),
+        None => {
+            return Err(AppError::structured(
+                ErrorCode::UnsupportedContent,
+                "missing dash streams",
+            ));
+        }
+    };
     let video = dash
         .video
         .into_iter()
@@ -80,8 +123,8 @@ pub fn parse_dash_selection(json: &str) -> AppResult<DashSelection> {
             AppError::structured(ErrorCode::UnsupportedContent, "missing audio stream")
         })?;
 
-    Ok(DashSelection {
-        quality: quality_label(data.quality.unwrap_or(0)).to_string(),
+    Ok(PlayurlSelection::Dash(DashSelection {
+        quality,
         video: MediaStream {
             url: dash_stream_url(&video)?,
             bandwidth: video.bandwidth,
@@ -90,7 +133,28 @@ pub fn parse_dash_selection(json: &str) -> AppResult<DashSelection> {
             url: dash_stream_url(&audio)?,
             bandwidth: audio.bandwidth,
         },
-    })
+    }))
+}
+
+fn parse_single_file_selection(
+    quality: String,
+    streams: Vec<DurlStream>,
+) -> AppResult<PlayurlSelection> {
+    let stream = streams
+        .into_iter()
+        .max_by_key(|stream| stream.size.unwrap_or(0))
+        .ok_or_else(|| {
+            AppError::structured(ErrorCode::UnsupportedContent, "missing durl stream")
+        })?;
+    let size = stream.size;
+    Ok(PlayurlSelection::SingleFile(SingleFileSelection {
+        quality,
+        stream: MediaStream {
+            url: stream.url,
+            bandwidth: size.unwrap_or(0),
+        },
+        size,
+    }))
 }
 
 fn dash_stream_url(stream: &DashStream) -> AppResult<String> {
@@ -124,14 +188,14 @@ pub async fn fetch_playurl_selection(
     client: &reqwest::Client,
     bvid: &str,
     cid: u64,
-) -> AppResult<DashSelection> {
+) -> AppResult<PlayurlSelection> {
     fetch_playurl_selection_from_url(client, &playurl_url(bvid, cid)).await
 }
 
 pub(crate) async fn fetch_playurl_selection_from_url(
     client: &reqwest::Client,
     url: &str,
-) -> AppResult<DashSelection> {
+) -> AppResult<PlayurlSelection> {
     let text = bilibili_get(client, url)
         .send()
         .await
@@ -142,7 +206,7 @@ pub(crate) async fn fetch_playurl_selection_from_url(
         .await
         .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
 
-    parse_dash_selection(&text)
+    parse_playurl_selection(&text)
 }
 
 pub async fn download_to_file(
@@ -375,6 +439,67 @@ mod tests {
     }
 
     #[test]
+    fn parses_single_file_durl_when_dash_is_absent() {
+        let json = r#"{
+          "code": 0,
+          "message": "0",
+          "data": {
+            "quality": 32,
+            "durl": [
+              {"url": "https://video.example.com/low.mp4", "size": 10},
+              {"url": "https://video.example.com/high.mp4", "size": 20}
+            ]
+          }
+        }"#;
+
+        let selected = parse_playurl_selection(json).unwrap();
+
+        assert_eq!(
+            selected,
+            PlayurlSelection::SingleFile(SingleFileSelection {
+                quality: "480P".into(),
+                stream: MediaStream {
+                    url: "https://video.example.com/high.mp4".into(),
+                    bandwidth: 20,
+                },
+                size: Some(20),
+            })
+        );
+    }
+
+    #[test]
+    fn falls_back_to_durl_when_dash_streams_are_empty() {
+        let json = r#"{
+          "code": 0,
+          "message": "0",
+          "data": {
+            "quality": 32,
+            "dash": {
+              "video": [],
+              "audio": []
+            },
+            "durl": [
+              {"url": "https://video.example.com/fallback.mp4", "size": 20}
+            ]
+          }
+        }"#;
+
+        let selected = parse_playurl_selection(json).unwrap();
+
+        assert_eq!(
+            selected,
+            PlayurlSelection::SingleFile(SingleFileSelection {
+                quality: "480P".into(),
+                stream: MediaStream {
+                    url: "https://video.example.com/fallback.mp4".into(),
+                    bandwidth: 20,
+                },
+                size: Some(20),
+            })
+        );
+    }
+
+    #[test]
     fn labels_known_quality_numbers() {
         assert_eq!(quality_label(120), "4K");
         assert_eq!(quality_label(116), "1080P60");
@@ -409,9 +534,20 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(selection.quality, "480P");
-        assert_eq!(selection.video.url, "video.m4s");
-        assert_eq!(selection.audio.url, "audio.m4s");
+        assert_eq!(
+            selection,
+            PlayurlSelection::Dash(DashSelection {
+                quality: "480P".into(),
+                video: MediaStream {
+                    url: "video.m4s".into(),
+                    bandwidth: 10,
+                },
+                audio: MediaStream {
+                    url: "audio.m4s".into(),
+                    bandwidth: 5,
+                },
+            })
+        );
     }
 
     #[tokio::test]
@@ -437,7 +573,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(selection.quality, "480P");
+        assert!(matches!(selection, PlayurlSelection::Dash(_)));
     }
 
     #[tokio::test]

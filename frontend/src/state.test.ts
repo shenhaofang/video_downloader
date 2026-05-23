@@ -17,10 +17,11 @@ describe("state defaults", () => {
     });
     expect(state.update).toEqual({
       phase: "idle",
-      currentVersion: "0.1.4",
+      currentVersion: "0.1.5",
       latestVersion: null,
       notes: null,
       error: null,
+      progress: null,
     });
   });
 

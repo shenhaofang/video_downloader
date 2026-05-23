@@ -1520,7 +1520,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_task_from_state_persists_missing_ffmpeg_failure_for_native_task() {
+    async fn run_native_task_persists_ffmpeg_failure() {
         let state = command_test_state().await;
         let created = create_task_with_downloader_from_state(
             &state,
@@ -1537,11 +1537,12 @@ mod tests {
         .unwrap();
         let task = created.tasks[0].clone();
 
-        let err = run_task_from_state(
+        let err = run_task_with_downloader_from_state(
             &state,
             RunTaskCommand {
                 task_id: task.id.to_string(),
             },
+            &FfmpegFailingDownloader,
         )
         .await
         .unwrap_err();
@@ -2312,6 +2313,30 @@ mod tests {
                     used_login: false,
                     bytes_total: Some(9),
                 })
+            })
+        }
+    }
+
+    struct FfmpegFailingDownloader;
+
+    impl PlatformDownloader for FfmpegFailingDownloader {
+        fn probe<'a>(
+            &'a self,
+            _input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async { unreachable!("command run tests do not probe") })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _input: DownloadInput,
+            _sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async {
+                Err(AppError::structured(
+                    crate::errors::ErrorCode::FfmpegError,
+                    "ffmpeg path is not configured",
+                ))
             })
         }
     }

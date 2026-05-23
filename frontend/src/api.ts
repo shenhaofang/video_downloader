@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   normalizeEngine,
@@ -82,6 +83,12 @@ export interface AppUpdateStatus {
   latestVersion: string | null;
   notes: string | null;
   pubDate: string | null;
+}
+
+export interface AppUpdateProgress {
+  downloaded: number;
+  total?: number | null;
+  percent?: number | null;
 }
 
 interface TauriAppUpdateStatus {
@@ -327,9 +334,24 @@ export async function installAppUpdate(): Promise<void> {
   }
 }
 
+export async function listenAppUpdateProgress(
+  handler: (progress: AppUpdateProgress) => void,
+): Promise<() => void> {
+  if (!hasTauriRuntime()) {
+    return () => {};
+  }
+
+  return listen<AppUpdateProgress>("app-update-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+function hasTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 function isTauriUnavailable(error: unknown): boolean {
-  const hasRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  if (hasRuntime) {
+  if (hasTauriRuntime()) {
     return false;
   }
 
@@ -367,7 +389,7 @@ function fallbackToolStatus(): ToolStatus {
 function fallbackAppUpdateStatus(): AppUpdateStatus {
   return {
     available: false,
-    currentVersion: "0.1.4",
+    currentVersion: "0.1.5",
     latestVersion: null,
     notes: null,
     pubDate: null,
