@@ -4,7 +4,7 @@
 
 **Goal:** Add signed GitHub Release application updates while keeping large media dependencies outside app update packages.
 
-**Architecture:** Tauri official updater handles app version checks, signature verification, download, install, and restart. FFmpeg and yt-dlp remain independent install-root dependencies. FFmpeg is also a required native-engine dependency, so the NSIS installer/update hook ensures it exists after install: existing complete tools are reused, missing tools are downloaded from the pinned release asset. Settings remains the explicit repair/reinstall path. The frontend talks only to local Tauri commands.
+**Architecture:** Tauri official updater handles app version checks, signature verification, download, install, and restart. FFmpeg and yt-dlp remain independent install-root dependencies. FFmpeg is also a required native-engine dependency, so the release flow produces two installers: the full first-install package bundles the pinned FFmpeg zip and installs it locally, while the slim app-update package excludes the zip and only repairs missing dependencies when needed. Existing complete tools are reused; missing tools are downloaded from the pinned release asset. Settings remains the explicit repair/reinstall path. The frontend talks only to local Tauri commands.
 
 **Tech Stack:** Tauri v2, `tauri-plugin-updater`, Rust command wrappers, GitHub Releases static `latest.json`, Vitest, Rust unit tests.
 
@@ -21,8 +21,8 @@
 - [ ] Add `tauri-plugin-updater` to Rust dependencies.
 - [ ] Generate a local updater signing key outside the repo.
 - [ ] Add updater `pubkey`, GitHub `latest.json` endpoint, `windows.installMode = "passive"`, and `bundle.createUpdaterArtifacts = true`.
-- [ ] Remove FFmpeg zip from `bundle.resources`; keep only scripts/assets needed by the app.
-- [ ] Update config guard tests so app update packages do not include `resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip`.
+- [ ] Keep FFmpeg zip in the full installer `bundle.resources`, but exclude it from the slim app-update package resources.
+- [ ] Update config guard tests so the slim app-update package does not include `resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip` while the full installer still does.
 
 ### Task 2: Backend Update Commands
 
@@ -47,11 +47,11 @@
 - Modify: `src-tauri/windows/hooks.nsh`
 - Modify: `src-tauri/resources/install-media-tools.ps1`
 
-- [ ] Add `install_media_tools` command that downloads `ffmpeg-win64-lgpl.zip` from GitHub Releases.
+- [ ] Add `install_media_tools` command that downloads `ffmpeg-win64-lgpl.zip` from GitHub Releases for repair and slim-update fallback, while the full installer reuses the bundled zip.
 - [ ] Verify SHA256 before extraction.
 - [ ] Extract into `dependencies\ffmpeg`.
 - [ ] Persist `ffmpeg_path` and `ffprobe_path` in app config.
-- [ ] Update NSIS hook so it conditionally ensures required FFmpeg tools after install/update: skip when `ffmpeg.exe` and `ffprobe.exe` already exist, download and verify the pinned release asset when either is missing, preserve dependency cleanup on uninstall and shortcut icon refresh.
+- [ ] Update NSIS hook so it conditionally ensures required FFmpeg tools after install/update: full installs extract the bundled zip, slim installs download and verify the pinned release asset only when either tool is missing, preserve dependency cleanup on uninstall and shortcut icon refresh.
 - [ ] Add Rust tests for install path persistence, missing/empty archive failures, and hook/config guards.
 
 ### Task 4: Frontend Settings UI
@@ -85,5 +85,6 @@
 - [ ] Run `cargo check`.
 - [ ] Run `cargo clippy -- -D warnings`.
 - [ ] Run `cargo test`.
-- [ ] Run `npm run tauri:build` with updater signing env vars.
+- [ ] Run `npm run tauri:build:release` with updater signing env vars to create both full setup and slim app-update artifacts.
+- [ ] Confirm `latest.json` was generated from the slim app-update installer path, not the full setup installer.
 - [ ] Commit and push to `origin/master`.

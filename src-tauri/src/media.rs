@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn tauri_config_keeps_ffmpeg_archive_out_of_app_update_bundle() {
+    fn tauri_config_bundles_required_ffmpeg_archive_for_full_installer() {
         let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         let text = fs::read_to_string(config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -452,10 +452,10 @@ mod tests {
             json["bundle"]["windows"]["nsis"]["installerHooks"],
             serde_json::json!("windows/hooks.nsh")
         );
-        assert!(!resources.contains(&serde_json::json!(
+        assert!(resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
+        assert!(resources.contains(&serde_json::json!(
             "resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip"
         )));
-        assert!(resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
         assert_eq!(
             json["plugins"]["updater"]["endpoints"][0],
             serde_json::json!(
@@ -585,16 +585,18 @@ mod tests {
 
         assert!(text.contains("!macro NSIS_HOOK_POSTINSTALL"));
         assert!(!text.contains("NSISdl::download"));
-        assert!(text.contains("-ArchiveUrl"));
+        assert!(text.contains("-ArchivePath"));
         assert!(text.contains("SetDetailsView show"));
         assert!(text.contains("FFmpeg media tools already installed"));
         assert!(text.contains("Installing required FFmpeg media tools"));
         assert!(text.contains("powershell.exe -NoProfile -ExecutionPolicy Bypass"));
         assert!(text.contains("resources\\install-media-tools.ps1"));
+        assert!(text.contains("-ArchivePath"));
+        assert!(text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
+        assert!(text.contains("-ArchiveUrl"));
         assert!(text.contains(
             "https://github.com/shenhaofang/video_downloader/releases/latest/download/ffmpeg-win64-lgpl.zip"
         ));
-        assert!(!text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
         assert!(text.contains("$INSTDIR\\dependencies\\ffmpeg"));
         assert!(text.contains("D3C0D41C26B64BB42ABBF9051A9494BC67185B6D9FA57798F20EFB0E0213CAF7"));
         assert!(text.contains("!macro NSIS_HOOK_PREUNINSTALL"));
@@ -611,10 +613,60 @@ mod tests {
 
         assert!(text.contains("[string]$ArchiveUrl"));
         assert!(text.contains("Required FFmpeg media tools already installed"));
+        assert!(text.contains("Bundled FFmpeg archive not found; downloading release asset"));
+        assert!(text.contains("curl.exe"));
+        assert!(text.contains("--connect-timeout"));
+        assert!(text.contains("--max-time"));
+        assert!(text.contains("--speed-time"));
+        assert!(text.contains("--speed-limit"));
+        assert!(text.contains("--retry"));
+        assert!(text.contains("--retry-all-errors"));
+        assert!(text.contains("Start-Process"));
+        assert!(text.contains("DownloadStallTimeoutSeconds"));
+        assert!(text.contains("Downloading FFmpeg archive:"));
         assert!(text.contains("Invoke-WebRequest"));
+        assert!(text.contains("-TimeoutSec"));
         assert!(text.contains("Verifying FFmpeg archive"));
         assert!(text.contains("FFmpeg archive checksum mismatch"));
         assert!(text.contains("FFmpeg media tools installed"));
+    }
+
+    #[test]
+    fn updater_metadata_script_can_target_slim_update_installer() {
+        let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("scripts")
+            .join("create-updater-latest-json.ps1");
+        let text = fs::read_to_string(script_path).unwrap();
+
+        assert!(text.contains("[string]$InstallerPath"));
+        assert!(text.contains("Resolve-Path -LiteralPath $InstallerPath"));
+        assert!(text.contains("$signaturePath = \"$($installer.FullName).sig\""));
+        assert!(text.contains("EscapeDataString($AssetName)"));
+    }
+
+    #[test]
+    fn release_build_script_creates_full_and_slim_installers() {
+        let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("scripts")
+            .join("build-release-installers.ps1");
+        let text = fs::read_to_string(script_path).unwrap();
+
+        assert!(text.contains("resources/install-media-tools.ps1"));
+        assert!(text.contains("resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip"));
+        assert!(
+            text.contains("Set-TauriResources @($installerScriptResource, $ffmpegArchiveResource)")
+        );
+        assert!(text.contains("Set-TauriResources @($installerScriptResource)"));
+        assert!(text.contains("_x64-full-setup.exe"));
+        assert!(text.contains("_x64-app-update.exe"));
+        assert!(text.contains("create-updater-latest-json.ps1"));
+        assert!(text.contains("-InstallerPath $updateInstaller.FullName"));
+        assert!(text.contains("-AssetName $updateInstaller.Name"));
+        assert!(text.contains("$originalConfig"));
     }
 
     #[test]

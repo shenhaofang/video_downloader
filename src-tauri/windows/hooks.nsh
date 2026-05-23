@@ -30,7 +30,7 @@ media_tools_installed:
 install_required_media_tools:
   DetailPrint "Installing required FFmpeg media tools"
   IfFileExists "$INSTDIR\resources\install-media-tools.ps1" 0 media_tools_script_missing
-  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\install-media-tools.ps1" -ArchiveUrl "${FFMPEG_ARCHIVE_URL}" -InstallRoot "$INSTDIR\dependencies\ffmpeg" -ExpectedSha256 "${FFMPEG_ARCHIVE_SHA256}"'
+  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\resources\install-media-tools.ps1" -ArchivePath "$INSTDIR\resources\vendor\ffmpeg\ffmpeg-win64-lgpl.zip" -ArchiveUrl "${FFMPEG_ARCHIVE_URL}" -InstallRoot "$INSTDIR\dependencies\ffmpeg" -ExpectedSha256 "${FFMPEG_ARCHIVE_SHA256}"'
   Pop $0
   ${If} $0 != 0
     MessageBox MB_ICONSTOP "Required FFmpeg installation failed with exit code $0."

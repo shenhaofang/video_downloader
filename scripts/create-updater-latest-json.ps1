@@ -2,7 +2,8 @@ param(
   [string]$Repo = "shenhaofang/video_downloader",
   [string]$Version = "",
   [string]$Notes = "",
-  [string]$AssetName = ""
+  [string]$AssetName = "",
+  [string]$InstallerPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,9 +17,13 @@ if (-not $Version) {
   $Version = [string]$config.version
 }
 
-$installer = Get-ChildItem -LiteralPath $bundleDir -Filter "*_x64-setup.exe" |
-  Sort-Object LastWriteTime -Descending |
-  Select-Object -First 1
+if ($InstallerPath) {
+  $installer = Get-Item -LiteralPath (Resolve-Path -LiteralPath $InstallerPath)
+} else {
+  $installer = Get-ChildItem -LiteralPath $bundleDir -Filter "*_x64-setup.exe" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+}
 if ($null -eq $installer) {
   throw "NSIS installer not found under $bundleDir"
 }
