@@ -475,6 +475,66 @@ describe("renderApp", () => {
     });
   });
 
+  test("does not auto-start the next child after pausing an automatic run", async () => {
+    const baseCollection = createdCollectionFixture();
+    const createdCollection = {
+      ...baseCollection,
+      tasks: baseCollection.tasks.map((task) => ({
+        ...task,
+        state: "queued" as const,
+      })),
+    };
+    const createTask = vi.fn().mockResolvedValue(createdCollection);
+    let resolveFirstRun: (task: CreatedTaskGroup["tasks"][number]) => void = () => {};
+    const runTask = vi.fn().mockImplementation(({ task_id }: { task_id: string }) => {
+      if (task_id === "task-1") {
+        return new Promise((resolve) => {
+          resolveFirstRun = resolve;
+        });
+      }
+      return Promise.resolve({
+        ...createdCollection.tasks[1],
+        state: "completed",
+        bytes_downloaded: 100,
+        bytes_total: 100,
+      });
+    });
+    const pauseTask = vi.fn().mockResolvedValue({
+      ...createdCollection.tasks[0],
+      state: "paused",
+    });
+    const state = createInitialState();
+    state.settings.concurrency = 1;
+    renderApp(root, state, {
+      createTask,
+      runTask,
+      pauseTask,
+      progressPollMs: 10_000,
+    });
+
+    root.querySelector<HTMLInputElement>("[data-testid='video-url']")!.value =
+      "https://www.bilibili.com/video/BV1xx411c7mD";
+    root.querySelector<HTMLButtonElement>("[data-testid='add-task']")!.click();
+
+    await vi.waitFor(() => {
+      expect(runTask).toHaveBeenCalledWith({ task_id: "task-1" });
+    });
+    root.querySelector<HTMLButtonElement>("[data-testid='pause-task-task-1']")!.click();
+
+    await vi.waitFor(() => {
+      expect(pauseTask).toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(root.querySelector<HTMLElement>(".child-state")?.textContent).toBe("已暂停");
+    });
+    resolveFirstRun({
+      ...createdCollection.tasks[0],
+      state: "paused",
+    });
+
+    await vi.waitFor(() => {
+      expect(runTask).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test("refreshes persisted task state when running a task fails quickly", async () => {
     const baseCollection = createdCollectionFixture();
     const createdCollection = {
@@ -528,6 +588,142 @@ describe("renderApp", () => {
 
     expect(root.textContent).toContain("失败原因");
     expect(root.textContent).toContain("duplicate field `base_url`");
+  });
+
+  test("adds semantic color classes to group and child task states", () => {
+    const failedCollection = createdCollectionFixture();
+    failedCollection.tasks[0] = {
+      ...failedCollection.tasks[0],
+      state: "failed",
+      error_message: "network failed",
+    };
+    failedCollection.tasks[1] = {
+      ...failedCollection.tasks[1],
+      state: "completed",
+      bytes_downloaded: 100,
+      bytes_total: 100,
+    };
+    failedCollection.tasks.push(
+      {
+        ...failedCollection.tasks[0],
+        id: "task-3",
+        title: "03 - 打包发布",
+        state: "queued",
+      },
+      {
+        ...failedCollection.tasks[1],
+        id: "task-4",
+        title: "04 - 下载中",
+        state: "downloading",
+      },
+      {
+        ...failedCollection.tasks[1],
+        id: "task-5",
+        title: "05 - 已暂停",
+        state: "paused",
+      },
+    );
+
+    renderApp(root, {
+      ...createInitialState(),
+      taskGroups: [failedCollection],
+    });
+
+    const groupState = root.querySelector<HTMLElement>(".state-pill");
+    const childStates = root.querySelectorAll<HTMLElement>(".child-state");
+
+    expect(groupState?.textContent).toBe("下载中");
+    expect(groupState?.classList.contains("state-downloading")).toBe(true);
+    expect(childStates[0].classList.contains("state-failed")).toBe(true);
+    expect(childStates[1].classList.contains("state-completed")).toBe(true);
+    expect(childStates[2].classList.contains("state-queued")).toBe(true);
+    expect(childStates[3].classList.contains("state-downloading")).toBe(true);
+    expect(childStates[4].classList.contains("state-paused")).toBe(true);
+  });
+
+  test("shows only applicable child task actions for every state", () => {
+    const collection = createdCollectionFixture();
+    const matrix: Array<[CreatedTaskGroup["tasks"][number]["state"], string[]]> = [
+      ["pending", ["pause", "delete"]],
+      ["probing", ["pause", "delete"]],
+      ["queued", ["start", "pause", "delete"]],
+      ["downloading", ["pause", "delete"]],
+      ["merging", ["pause", "delete"]],
+      ["completed", ["delete"]],
+      ["failed", ["retry", "delete"]],
+      ["paused", ["start", "delete"]],
+      ["interrupted", ["start", "pause", "delete"]],
+      ["cancelled", ["delete"]],
+    ];
+    collection.tasks = matrix.map(([stateName], index) => ({
+      ...collection.tasks[0],
+      id: `${stateName}-task`,
+      title: `${index + 1} - ${stateName}`,
+      state: stateName,
+      bytes_downloaded: stateName === "completed" ? 100 : 0,
+      bytes_total: 100,
+      error_message: stateName === "failed" ? "network failed" : null,
+    }));
+
+    renderApp(root, {
+      ...createInitialState(),
+      taskGroups: [collection],
+    });
+
+    for (const [stateName, expectedActions] of matrix) {
+      for (const action of ["start", "pause", "retry", "delete"]) {
+        const button = root.querySelector(`[data-testid='${action}-task-${stateName}-task']`);
+        if (expectedActions.includes(action)) {
+          expect(button, `${stateName} should show ${action}`).not.toBeNull();
+        } else {
+          expect(button, `${stateName} should hide ${action}`).toBeNull();
+        }
+      }
+    }
+  });
+
+  test("shows only applicable group task actions for every state", () => {
+    const matrix: Array<[CreatedTaskGroup["tasks"][number]["state"], string[]]> = [
+      ["pending", ["pause", "delete"]],
+      ["probing", ["pause", "delete"]],
+      ["queued", ["continue", "pause", "delete"]],
+      ["downloading", ["pause", "delete"]],
+      ["merging", ["pause", "delete"]],
+      ["completed", ["delete"]],
+      ["failed", ["continue", "delete"]],
+      ["paused", ["continue", "delete"]],
+      ["interrupted", ["continue", "pause", "delete"]],
+      ["cancelled", ["delete"]],
+    ];
+
+    for (const [stateName, expectedActions] of matrix) {
+      const collection = createdCollectionFixture();
+      collection.group.id = `${stateName}-group`;
+      collection.group.state = stateName;
+      collection.tasks = [
+        {
+          ...collection.tasks[0],
+          id: `${stateName}-task`,
+          state: stateName,
+          bytes_downloaded: stateName === "completed" ? 100 : 0,
+          bytes_total: 100,
+          error_message: stateName === "failed" ? "network failed" : null,
+        },
+      ];
+      renderApp(root, {
+        ...createInitialState(),
+        taskGroups: [collection],
+      });
+
+      for (const action of ["continue", "pause", "delete"]) {
+        const button = root.querySelector(`[data-testid='${action}-group-${stateName}-group']`);
+        if (expectedActions.includes(action)) {
+          expect(button, `${stateName} group should show ${action}`).not.toBeNull();
+        } else {
+          expect(button, `${stateName} group should hide ${action}`).toBeNull();
+        }
+      }
+    }
   });
 
   test("controls individual child tasks", async () => {
@@ -672,6 +868,12 @@ describe("renderApp", () => {
           state: "failed" as const,
           error_message: "network failed",
         },
+        {
+          ...createdCollection.tasks[0],
+          id: "task-4",
+          title: "04 - 已取消",
+          state: "cancelled" as const,
+        },
       ],
     };
     const startTask = vi.fn().mockResolvedValue({
@@ -702,8 +904,11 @@ describe("renderApp", () => {
     await vi.waitFor(() => {
       expect(startTask).toHaveBeenCalledWith({ task_id: "task-2" });
       expect(retryTask).toHaveBeenCalledWith({ task_id: "task-3" });
+      expect(startTask).not.toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(startTask).not.toHaveBeenCalledWith({ task_id: "task-4" });
+      expect(retryTask).not.toHaveBeenCalledWith({ task_id: "task-4" });
       expect(runTask).not.toHaveBeenCalled();
-      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("已完成");
+      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("已取消");
     });
   });
 
@@ -732,6 +937,24 @@ describe("renderApp", () => {
           bytes_downloaded: 40,
           bytes_total: 100,
         },
+        {
+          ...createdCollection.tasks[0],
+          id: "task-4",
+          title: "04 - 已暂停",
+          state: "paused" as const,
+        },
+        {
+          ...createdCollection.tasks[0],
+          id: "task-5",
+          title: "05 - 失败",
+          state: "failed" as const,
+        },
+        {
+          ...createdCollection.tasks[0],
+          id: "task-6",
+          title: "06 - 已取消",
+          state: "cancelled" as const,
+        },
       ],
     };
     const pauseTask = vi.fn().mockImplementation(({ task_id }: { task_id: string }) => {
@@ -756,7 +979,11 @@ describe("renderApp", () => {
       expect(pauseTask).toHaveBeenCalledTimes(2);
       expect(pauseTask).toHaveBeenCalledWith({ task_id: "task-2" });
       expect(pauseTask).toHaveBeenCalledWith({ task_id: "task-3" });
-      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("已暂停");
+      expect(pauseTask).not.toHaveBeenCalledWith({ task_id: "task-1" });
+      expect(pauseTask).not.toHaveBeenCalledWith({ task_id: "task-4" });
+      expect(pauseTask).not.toHaveBeenCalledWith({ task_id: "task-5" });
+      expect(pauseTask).not.toHaveBeenCalledWith({ task_id: "task-6" });
+      expect(root.querySelector<HTMLElement>(".state-pill")?.textContent).toBe("失败");
     });
   });
 

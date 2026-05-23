@@ -162,6 +162,8 @@ mod tests {
         let output = downloader
             .download(
                 DownloadInput {
+                    task_id: "task-1".into(),
+                    source_url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                     item,
                     output_path: "D:\\Videos\\sample.mp4".into(),
                 },

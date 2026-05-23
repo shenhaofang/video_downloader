@@ -40,6 +40,8 @@ pub struct ProbeResult {
 
 #[derive(Debug, Clone)]
 pub struct DownloadInput {
+    pub task_id: String,
+    pub source_url: String,
     pub item: DownloadItem,
     pub output_path: String,
 }

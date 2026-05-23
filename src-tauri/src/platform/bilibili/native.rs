@@ -216,11 +216,11 @@ impl PlatformDownloader for NativeBilibiliDownloader {
             {
                 crate::media::ensure_directory(parent)?;
             }
-            let temp_dir = native_download_temp_dir(&output_path);
+            let temp_dir = native_download_temp_dir(&output_path, &input.task_id);
             crate::media::ensure_directory(&temp_dir)?;
             let result = async {
-                let video_path = temp_dir.join(format!("p{}-video.m4s", metadata.page));
-                let audio_path = temp_dir.join(format!("p{}-audio.m4s", metadata.page));
+                let video_path = temp_dir.join("video.part");
+                let audio_path = temp_dir.join("audio.part");
 
                 sink.emit(crate::platform::DownloadEvent::State(
                     "downloading video".into(),
@@ -261,18 +261,21 @@ impl PlatformDownloader for NativeBilibiliDownloader {
                 })
             }
             .await;
-            let _ = std::fs::remove_dir_all(&temp_dir);
+            if result.is_ok() {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+            }
 
             result
         })
     }
 }
 
-fn native_download_temp_dir(output_path: &Path) -> PathBuf {
+fn native_download_temp_dir(output_path: &Path, task_id: &str) -> PathBuf {
     output_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(format!(".video-downloader-{}", uuid::Uuid::new_v4()))
+        .join(".video-downloader")
+        .join(task_id)
 }
 
 #[cfg(test)]
@@ -484,6 +487,8 @@ mod tests {
         let err = downloader
             .download(
                 DownloadInput {
+                    task_id: "task-missing-metadata".into(),
+                    source_url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                     item: DownloadItem {
                         title: "BV1xx411c7mD P1".into(),
                         output_file: "BV1xx411c7mD P1.mp4".into(),
@@ -510,6 +515,8 @@ mod tests {
         let err = downloader
             .download(
                 DownloadInput {
+                    task_id: "task-missing-ffmpeg".into(),
+                    source_url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                     item: bilibili_download_item(),
                     output_path: "D:\\Videos\\BV1xx411c7mD P1.mp4".into(),
                 },
@@ -546,6 +553,8 @@ mod tests {
         let output = downloader
             .download(
                 DownloadInput {
+                    task_id: "task-success".into(),
+                    source_url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
                     item: bilibili_download_item(),
                     output_path: output_path.to_string_lossy().to_string(),
                 },
@@ -561,6 +570,7 @@ mod tests {
         assert_eq!(output.quality, Some("480P".into()));
         assert_eq!(output.bytes_total, Some(11));
         assert_eq!(fs::read_to_string(&output_path).unwrap().trim(), "merged");
+        assert!(!native_download_temp_dir(&output_path, "task-success").exists());
         assert!(sink
             .events()
             .iter()

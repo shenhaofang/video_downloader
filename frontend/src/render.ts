@@ -261,6 +261,9 @@ async function runTasksWithConcurrency(
   const workerCount = Math.min(tasks.length, Math.max(1, state.settings.concurrency));
   const workers = Array.from({ length: workerCount }, async () => {
     while (nextTaskIndex < tasks.length) {
+      if (hasAutoRunPauseSignal(state, tasks)) {
+        break;
+      }
       const task = tasks[nextTaskIndex];
       nextTaskIndex += 1;
       try {
@@ -278,6 +281,10 @@ async function runTasksWithConcurrency(
   });
 
   await Promise.all(workers);
+}
+
+function hasAutoRunPauseSignal(state: AppState, tasks: DownloadTask[]): boolean {
+  return tasks.some((task) => state.autoRunPausedTaskIds.has(task.id));
 }
 
 async function runTaskWithProgressPolling(
@@ -567,7 +574,7 @@ function buildTaskGroupCard(
   summary.append(
     element("strong", "", created.group.title),
     element("span", "", created.group.output_dir),
-    element("span", "state-pill", stateLabel(taskGroupState(created))),
+    stateElement("span", "state-pill", taskGroupState(created)),
   );
   summary.append(buildTaskGroupActions(created, state, taskList, dependencies));
   const children = element("div", "child-task-list");
@@ -595,6 +602,7 @@ function buildTaskGroupActions(
       event.preventDefault();
       event.stopPropagation();
       button.disabled = true;
+      continuable.forEach((task) => state.autoRunPausedTaskIds.delete(task.id));
       try {
         await runTasksWithConcurrency(state, taskList, continuable, dependencies, (task) =>
           task.state === "failed" ? dependencies.retryTask : dependencies.startTask,
@@ -617,6 +625,8 @@ function buildTaskGroupActions(
       event.preventDefault();
       event.stopPropagation();
       pause.disabled = true;
+      const pausedIds = pausable.map((task) => task.id);
+      pausedIds.forEach((taskId) => state.autoRunPausedTaskIds.add(taskId));
       try {
         for (const task of pausable) {
           const updated = await dependencies.pauseTask({ task_id: task.id });
@@ -625,6 +635,7 @@ function buildTaskGroupActions(
         renderTaskList(taskList, state, dependencies);
       } catch (error) {
         console.error("Failed to pause task group", error);
+        pausedIds.forEach((taskId) => state.autoRunPausedTaskIds.delete(taskId));
         pause.disabled = false;
       }
     });
@@ -676,7 +687,7 @@ function buildChildTask(
   row.append(
     element("div", "child-title", task.title),
     element("div", "child-file", fileName(task.output_file)),
-    element("div", "child-state", stateLabel(task.state)),
+    stateElement("div", "child-state", task.state),
     element("div", "child-progress", progressText(task)),
     element("div", "child-retry", `重试 ${task.retry_count}/${task.max_retries}`),
     element("div", "child-meta", `${task.quality ?? "自动"} · ${task.engine}`),
@@ -695,36 +706,59 @@ function buildChildActions(
   dependencies: Required<RenderDependencies>,
 ): HTMLElement {
   const actions = element("div", "child-actions");
-  const start = childActionButton("开始", `start-task-${task.id}`, async () => {
-    await runChildTask(task.id, state, taskList, dependencies, dependencies.startTask);
-  });
-  start.disabled = !["queued", "paused", "interrupted"].includes(task.state);
+  const buttons: HTMLButtonElement[] = [];
+  if (["queued", "paused", "interrupted"].includes(task.state)) {
+    buttons.push(
+      childActionButton("开始", `start-task-${task.id}`, async () => {
+        state.autoRunPausedTaskIds.delete(task.id);
+        await runChildTask(task.id, state, taskList, dependencies, dependencies.startTask);
+      }),
+    );
+  }
 
-  const pause = childActionButton("暂停", `pause-task-${task.id}`, async () => {
-    const updated = await dependencies.pauseTask({ task_id: task.id });
-    replaceTask(state, updated);
-    renderTaskList(taskList, state, dependencies);
-  });
-  pause.disabled = ![
-    "pending",
-    "probing",
-    "queued",
-    "downloading",
-    "merging",
-    "interrupted",
-  ].includes(task.state);
+  if (
+    [
+      "pending",
+      "probing",
+      "queued",
+      "downloading",
+      "merging",
+      "interrupted",
+    ].includes(task.state)
+  ) {
+    buttons.push(
+      childActionButton("暂停", `pause-task-${task.id}`, async () => {
+        state.autoRunPausedTaskIds.add(task.id);
+        try {
+          const updated = await dependencies.pauseTask({ task_id: task.id });
+          replaceTask(state, updated);
+          renderTaskList(taskList, state, dependencies);
+        } catch (error) {
+          state.autoRunPausedTaskIds.delete(task.id);
+          throw error;
+        }
+      }),
+    );
+  }
 
-  const retry = childActionButton("重试", `retry-task-${task.id}`, async () => {
-    await runChildTask(task.id, state, taskList, dependencies, dependencies.retryTask);
-  });
-  retry.disabled = task.state !== "failed";
+  if (task.state === "failed") {
+    buttons.push(
+      childActionButton("重试", `retry-task-${task.id}`, async () => {
+        state.autoRunPausedTaskIds.delete(task.id);
+        await runChildTask(task.id, state, taskList, dependencies, dependencies.retryTask);
+      }),
+    );
+  }
 
-  const remove = childActionButton("删除", `delete-task-${task.id}`, async () => {
-    state.taskGroups = await dependencies.deleteTask({ task_id: task.id });
-    renderTaskList(taskList, state, dependencies);
-  });
+  buttons.push(
+    childActionButton("删除", `delete-task-${task.id}`, async () => {
+      state.autoRunPausedTaskIds.delete(task.id);
+      state.taskGroups = await dependencies.deleteTask({ task_id: task.id });
+      renderTaskList(taskList, state, dependencies);
+    }),
+  );
 
-  actions.append(start, pause, retry, remove);
+  actions.append(...buttons);
   return actions;
 }
 
@@ -1145,6 +1179,14 @@ function stateLabel(state: string): string {
     cancelled: "已取消",
   };
   return labels[state] ?? state;
+}
+
+function stateElement(
+  tag: keyof HTMLElementTagNameMap,
+  className: string,
+  state: string,
+): HTMLElement {
+  return element(tag, `${className} state-${state}`, stateLabel(state));
 }
 
 function taskGroupState(created: CreatedTaskGroup): DownloadTask["state"] {

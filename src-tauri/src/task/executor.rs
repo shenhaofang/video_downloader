@@ -1,9 +1,10 @@
 use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::models::{DownloadTask, TaskState};
 use crate::platform::{
-    DownloadEvent, DownloadInput, DownloadItem, DownloadItemMetadata, PlatformDownloader,
+    DownloadEvent, DownloadInput, DownloadItem, DownloadItemMetadata, EventSink, PlatformDownloader,
 };
 use crate::storage::Storage;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub async fn run_task_once(
     storage: &Storage,
@@ -15,19 +16,32 @@ pub async fn run_task_once(
     current.error_code = None;
     current.error_message = None;
     storage.update_task(&current).await?;
+    let group = storage.load_group(current.group_id).await?;
 
-    let sink = crate::task::events::MemoryEventSink::default();
+    let (event_sender, event_receiver) = unbounded_channel();
+    let sink = RealtimeEventSink::new(event_sender);
+    let event_storage = storage.clone();
+    let event_task = current.clone();
+    let event_handle =
+        tokio::spawn(
+            async move { apply_event_stream(event_storage, event_task, event_receiver).await },
+        );
     let result = downloader
         .download(
             DownloadInput {
+                task_id: current.id.to_string(),
+                source_url: group.source_url,
                 item: download_item_from_task(&current),
                 output_path: current.output_file.clone(),
             },
             &sink,
         )
         .await;
+    drop(sink);
 
-    apply_events(storage, &mut current, sink.events()).await?;
+    current = event_handle
+        .await
+        .map_err(|err| AppError::structured(ErrorCode::UnknownError, err.to_string()))??;
 
     match result {
         Ok(output) => {
@@ -54,34 +68,59 @@ pub async fn run_task_once(
     }
 }
 
-async fn apply_events(
+async fn apply_event_stream(
+    storage: Storage,
+    mut task: DownloadTask,
+    mut receiver: UnboundedReceiver<DownloadEvent>,
+) -> AppResult<DownloadTask> {
+    while let Some(event) = receiver.recv().await {
+        apply_event(&storage, &mut task, event).await?;
+    }
+
+    Ok(task)
+}
+
+async fn apply_event(
     storage: &Storage,
     task: &mut DownloadTask,
-    events: Vec<DownloadEvent>,
+    event: DownloadEvent,
 ) -> AppResult<()> {
-    for event in events {
-        match event {
-            DownloadEvent::Log(line) => {
-                storage.append_log(task.id, &line).await?;
-            }
-            DownloadEvent::Progress { downloaded, total } => {
-                task.bytes_downloaded = downloaded;
-                task.bytes_total = total.or(task.bytes_total);
+    match event {
+        DownloadEvent::Log(line) => {
+            storage.append_log(task.id, &line).await?;
+        }
+        DownloadEvent::Progress { downloaded, total } => {
+            task.bytes_downloaded = downloaded;
+            task.bytes_total = total.or(task.bytes_total);
+            storage.update_task(task).await?;
+        }
+        DownloadEvent::State(state) => {
+            if state.starts_with("downloading") {
+                task.state = TaskState::Downloading;
                 storage.update_task(task).await?;
-            }
-            DownloadEvent::State(state) => {
-                if state.starts_with("downloading") {
-                    task.state = TaskState::Downloading;
-                    storage.update_task(task).await?;
-                } else if state == "merging" {
-                    task.state = TaskState::Merging;
-                    storage.update_task(task).await?;
-                }
+            } else if state == "merging" {
+                task.state = TaskState::Merging;
+                storage.update_task(task).await?;
             }
         }
     }
-
     Ok(())
+}
+
+struct RealtimeEventSink {
+    sender: UnboundedSender<DownloadEvent>,
+}
+
+impl RealtimeEventSink {
+    fn new(sender: UnboundedSender<DownloadEvent>) -> Self {
+        Self { sender }
+    }
+}
+
+impl EventSink for RealtimeEventSink {
+    fn emit(&self, event: DownloadEvent) {
+        let _ = self.sender.send(event);
+    }
 }
 
 fn download_item_from_task(task: &DownloadTask) -> DownloadItem {
@@ -137,6 +176,7 @@ mod tests {
     use std::path::PathBuf;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
     use uuid::Uuid;
 
     #[tokio::test]
@@ -197,6 +237,49 @@ mod tests {
         db.close().await;
     }
 
+    #[tokio::test]
+    async fn run_task_once_persists_events_while_download_is_running() {
+        let db = TestDatabase::open().await;
+        let task = persist_task(&db.storage, queued_task()).await;
+        let emitted = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let downloader = BlockingDownloader {
+            emitted: emitted.clone(),
+            release: release.clone(),
+        };
+        let storage_for_run = db.storage.clone();
+        let task_for_run = task.clone();
+
+        let handle = tokio::spawn(async move {
+            run_task_once(&storage_for_run, task_for_run, &downloader).await
+        });
+        emitted.notified().await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let loaded = db
+                    .storage
+                    .load_tasks_for_group(task.group_id)
+                    .await
+                    .unwrap();
+                let logs = db.storage.load_logs_for_task(task.id).await.unwrap();
+                if loaded[0].bytes_downloaded == 5
+                    && loaded[0].bytes_total == Some(11)
+                    && logs == vec!["[blocking] progress".to_string()]
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("progress and logs should persist before the downloader finishes");
+
+        release.notify_one();
+        handle.await.unwrap().unwrap();
+        db.close().await;
+    }
+
     struct RecordingDownloader {
         mode: RecordingMode,
         input: Arc<Mutex<Option<DownloadInput>>>,
@@ -225,6 +308,44 @@ mod tests {
 
         fn input(&self) -> Option<DownloadInput> {
             self.input.lock().unwrap().clone()
+        }
+    }
+
+    struct BlockingDownloader {
+        emitted: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    impl PlatformDownloader for BlockingDownloader {
+        fn probe<'a>(
+            &'a self,
+            _input: ProbeInput,
+        ) -> Pin<Box<dyn Future<Output = AppResult<ProbeResult>> + Send + 'a>> {
+            Box::pin(async { unreachable!("executor tests do not probe") })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _input: DownloadInput,
+            sink: &'a dyn EventSink,
+        ) -> Pin<Box<dyn Future<Output = AppResult<DownloadOutput>> + Send + 'a>> {
+            Box::pin(async move {
+                sink.emit(crate::platform::DownloadEvent::Log(
+                    "[blocking] progress".into(),
+                ));
+                sink.emit(crate::platform::DownloadEvent::Progress {
+                    downloaded: 5,
+                    total: Some(11),
+                });
+                self.emitted.notify_one();
+                self.release.notified().await;
+                Ok(DownloadOutput {
+                    output_path: "D:\\Videos\\bilibili\\out.mp4".into(),
+                    quality: Some("480P".into()),
+                    used_login: false,
+                    bytes_total: Some(11),
+                })
+            })
         }
     }
 

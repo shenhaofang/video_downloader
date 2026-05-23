@@ -150,6 +150,19 @@ impl Storage {
         rows.into_iter().map(group_from_row).collect()
     }
 
+    pub async fn load_group(&self, group_id: Uuid) -> AppResult<TaskGroup> {
+        let row = sqlx::query(
+            "SELECT id, source_url, platform, title, output_dir, engine, state, created_at FROM task_groups WHERE id = ?",
+        )
+        .bind(group_id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?
+        .ok_or_else(|| AppError::structured(ErrorCode::FilesystemError, "task group not found"))?;
+
+        group_from_row(row)
+    }
+
     pub async fn insert_task(&self, task: &DownloadTask) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO download_tasks (id, group_id, title, output_file, state, engine, quality, used_login, bytes_downloaded, bytes_total, retry_count, max_retries, error_code, error_message, bvid, cid, page) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

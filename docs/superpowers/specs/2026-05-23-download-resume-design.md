@@ -1,149 +1,149 @@
-# Download Resume Design
+# 下载断点续传设计
 
-## Goal
+## 目标
 
-Paused downloads must be recoverable for both engines:
+暂停后的下载必须能在两个内核里恢复：
 
-- `native` Bilibili downloads should reuse already written audio/video partial files when the CDN supports byte ranges.
-- `yt-dlp` downloads should use `yt-dlp`'s own continuation behavior and preserve its partial files across pause/start.
+- `native` Bilibili 下载在 CDN 支持字节范围请求时，应复用已经写入的音频/视频 partial 文件。
+- `yt-dlp` 下载应使用 `yt-dlp` 自身的续传能力，并在暂停/开始之间保留它自己的 partial 文件。
 
-The user-facing controls stay unchanged: child rows and task groups continue to use `pause`, `start`, `retry`, and `delete`. The behavior behind `start` and group `continue` changes from "always restart from scratch" to "resume when safe, restart only when resume is unsafe or unsupported".
+用户可见控制保持不变：子任务行和任务组继续使用 `pause`、`start`、`retry` 和 `delete`。变化只发生在 `start` 和任务组 `continue` 背后的行为：从“总是从头下载”升级为“安全时续传，只有续传不安全或不支持时才重新下载”。
 
-## Current State
+## 当前状态
 
-`native` currently creates a fresh UUID temporary directory for each run, downloads video and audio streams with `File::create`, and removes the temp directory after the run. Pausing aborts the active future and persists `TaskState::Paused`, but starting again performs a fresh execution.
+`native` 当前每次运行都会创建新的 UUID 临时目录，用 `File::create` 下载视频和音频流，并在运行结束后删除临时目录。暂停会 abort 当前 active future 并持久化 `TaskState::Paused`，但再次开始时会执行一次全新的下载。
 
-`yt-dlp` currently has detection, installation, argument construction, and process execution helpers. However, persisted `YtDlp` task creation and task execution are not wired into `create_task` and `run_task`; those paths still return `engine_missing`.
+`yt-dlp` 当前已有检测、安装、参数构造和进程执行 helper。不过，持久化的 `YtDlp` 任务创建和任务执行还没有接到 `create_task` 与 `run_task`；这些路径目前仍返回 `engine_missing`。
 
-## Requirements
+## 需求
 
-- Pause must not convert a task into `failed`.
-- Starting a paused task must prefer resuming partial bytes.
-- If resume cannot be proven safe, the app must fall back to a clean re-download for that task or stream.
-- Delete must clean task-owned partial files without deleting unrelated user files.
-- Retry from `failed` should keep useful resumable partials unless the failure indicates corrupt local data.
-- Completed tasks should remove task-owned resume metadata and partial files.
-- The UI should continue to show existing progress, retry count, and failure detail surfaces.
-- No per-task engine selector should be added to the create form or child rows.
+- 暂停不能把任务转换成 `failed`。
+- 开始已暂停任务时，应优先恢复 partial 字节。
+- 如果无法证明续传是安全的，应用必须对该任务或该流回退为干净的重新下载。
+- 删除必须清理任务自有 partial 文件，不能删除无关用户文件。
+- 从 `failed` 重试时，默认保留有用的可续传 partial，除非失败原因说明本地数据已损坏。
+- 任务完成后应移除任务自有 resume metadata 和 partial 文件。
+- UI 应继续展示现有进度、重试次数和失败详情。
+- 创建表单或子任务行里不新增单任务内核选择器。
 
-## Native Resume Design
+## native 续传设计
 
-### Stable Resume Workspace
+### 稳定的续传工作目录
 
-Each task gets a deterministic workspace under its output directory:
+每个任务在自己的输出目录下获得一个确定性的工作目录：
 
 ```text
 <output-dir>/.video-downloader/<task-id>/
 ```
 
-The native engine stores:
+`native` 内核存储：
 
 - `video.part`
 - `audio.part`
 - `resume.json`
 
-`resume.json` records the task id, engine, bvid, cid, page, selected quality, stream URLs or URL fingerprints, current stream sizes, and expected total sizes when available.
+`resume.json` 记录 task id、engine、bvid、cid、page、选定 quality、流 URL 或 URL fingerprint、当前流大小，以及可用时的预期总大小。
 
-### Range Download Flow
+### Range 下载流程
 
-For each stream:
+对每条流分别处理：
 
-1. Re-fetch Bilibili playurl before every run so expired CDN URLs are refreshed.
-2. Inspect existing `.part` length.
-3. If the file is empty or missing, download normally.
-4. If the file has bytes, request `Range: bytes=<existing-size>-`.
-5. If the server returns `206 Partial Content`, append to the `.part` file.
-6. If the server returns `200 OK`, delete that stream's `.part` and restart that stream from byte 0.
-7. If the server returns `416 Range Not Satisfiable`, verify whether the local size already matches the expected total; if not, restart that stream.
+1. 每次运行前重新获取 Bilibili playurl，刷新可能过期的 CDN URL。
+2. 检查现有 `.part` 文件长度。
+3. 如果文件为空或不存在，正常下载。
+4. 如果文件已有字节，请求 `Range: bytes=<existing-size>-`。
+5. 如果服务端返回 `206 Partial Content`，追加写入 `.part` 文件。
+6. 如果服务端返回 `200 OK`，删除该流的 `.part`，从 byte 0 重新下载该流。
+7. 如果服务端返回 `416 Range Not Satisfiable`，检查本地大小是否已经等于预期总大小；否则重新下载该流。
 
-Video and audio are independent. A task can resume video while restarting audio, or the other way around.
+视频和音频相互独立。一个任务可以续传视频同时重下音频，也可以反过来。
 
-### Merge Flow
+### 合并流程
 
-FFmpeg merge is not resumed. If pause happens during merge, starting the task again should reuse completed `.part` media files and run merge from the beginning.
+FFmpeg merge 不做断点续传。如果暂停发生在 merge 阶段，再次开始任务时应复用已经完整的 `.part` 媒体文件，并从头执行 merge。
 
-After successful merge:
+成功 merge 后：
 
-- Persist `completed`.
-- Remove the task workspace.
+- 持久化 `completed`。
+- 删除该任务工作目录。
 
-### Safety Rules
+### 安全规则
 
-- Never append to a partial file if bvid/cid/page/quality no longer matches the task.
-- Never append when the existing file is larger than the expected total.
-- Never delete outside `<output-dir>/.video-downloader/<task-id>/`.
-- Use `kill_on_drop` for external processes so pause/delete can stop active work.
+- 如果 bvid/cid/page/quality 不再匹配任务，绝不向 partial 文件追加。
+- 如果现有文件大于预期总大小，绝不追加。
+- 绝不删除 `<output-dir>/.video-downloader/<task-id>/` 之外的文件。
+- 外部进程使用 `kill_on_drop`，确保 pause/delete 能停止 active work。
 
-## yt-dlp Resume Design
+## yt-dlp 续传设计
 
-### Wiring Missing Task Paths
+### 接上缺失的任务路径
 
-This feature also wires `yt-dlp` task creation and execution:
+这个功能同时接上 `yt-dlp` 任务创建和执行：
 
-- `yt-dlp --dump-json` probes metadata and creates persisted `DownloadTask` rows.
-- Download execution uses the persisted task URL/output path and the configured `yt-dlp.exe`.
-- The process runs through the existing no-window process helper.
-- Active run registration must prevent duplicate `yt-dlp` processes for the same task.
+- `yt-dlp --dump-json` 用于探测 metadata，并创建持久化 `DownloadTask` 行。
+- 下载执行使用持久化 task URL/output path 和配置好的 `yt-dlp.exe`。
+- 进程通过现有 no-window process helper 运行。
+- active run 注册必须阻止同一个任务重复启动多个 `yt-dlp` 进程。
 
-### Continuation Behavior
+### 续传行为
 
-The app should let `yt-dlp` manage its own resume files:
+应用应让 `yt-dlp` 管理它自己的 resume 文件：
 
-- Pass `--continue`.
-- Do not pass `--no-continue`.
-- Use a stable output template for each persisted task.
-- Preserve `yt-dlp` partial files between pause and start.
-- On pause/delete, abort the active `yt-dlp` process. Pause keeps partial files; delete removes task-owned partial files.
+- 传入 `--continue`。
+- 不传入 `--no-continue`。
+- 对每个持久化任务使用稳定 output template。
+- 在暂停和开始之间保留 `yt-dlp` partial 文件。
+- pause/delete 时 abort active `yt-dlp` 进程。pause 保留 partial 文件；delete 删除任务自有 partial 文件。
 
-Expected task-owned files include the final target and adjacent files generated from the same output template, such as `.part`, `.ytdl`, `.temp`, and `.frag` variants. Cleanup must be conservative: remove only paths derived from the exact task output path or inside the task workspace.
+预期任务自有文件包括最终目标文件，以及从同一个 output template 派生的相邻文件，例如 `.part`、`.ytdl`、`.temp` 和 `.frag` 变体。清理必须保守：只删除从精确 task output path 派生的路径，或位于任务工作目录内的路径。
 
-### Progress and Logs
+### 进度和日志
 
-Use `--newline` output and parse enough progress to update:
+使用 `--newline` 输出，并解析足够的信息来更新：
 
 - `bytes_downloaded`
 - `bytes_total`
 - task logs
 - `downloading` / `merging` state
 
-If parsing is incomplete, preserve raw lines in task logs and keep coarse state updates rather than hiding the process.
+如果解析不完整，应保留原始输出行到 task logs，并保持粗粒度状态更新，而不是隐藏进程信息。
 
-## Task Lifecycle
+## 任务生命周期
 
-- `run_task`: automatic post-create runner. It should skip `paused` tasks, preserving the existing rule that paused tasks only restart manually.
-- `start_task`: manually starts `queued`, `paused`, or `interrupted` tasks and enables resume behavior.
-- `retry_task`: resets failure fields and starts again. It should not delete partials by default.
-- `pause_task`: aborts the active run and persists `paused`.
-- `delete_task`: aborts the active run, deletes the persisted task, and cleans task-owned resume files.
+- `run_task`：创建后的自动 runner。它应跳过 `paused` 任务，保留“暂停任务只能手动重新开始”的现有规则。
+- `start_task`：手动启动 `queued`、`paused` 或 `interrupted` 任务，并启用续传行为。
+- `retry_task`：重置失败字段并重新开始。默认不删除 partial。
+- `pause_task`：abort active run 并持久化 `paused`。
+- `delete_task`：abort active run，删除持久化任务，并清理任务自有 resume 文件。
 
-## Error Handling
+## 错误处理
 
-- Network interruption during native resume remains `network_error`; the task becomes `failed` only when the active run returns an error rather than being paused.
-- Missing or invalid `yt-dlp` remains `engine_missing`.
-- `yt-dlp` non-zero exits map to `unknown_error` unless a clearer existing error code can be inferred.
-- Filesystem cleanup failures should be logged and surfaced as `filesystem_error` when they prevent task completion or deletion.
-- Platform response changes in native still map to `platform_changed`.
+- native 续传中的网络中断仍是 `network_error`；只有 active run 返回错误时任务才变为 `failed`，暂停本身不会导致失败。
+- 缺失或无效的 `yt-dlp` 仍是 `engine_missing`。
+- `yt-dlp` 非零退出码映射为 `unknown_error`，除非能推断出更明确的现有错误码。
+- 文件系统清理失败如果阻止任务完成或删除，应记录日志并暴露为 `filesystem_error`。
+- native 平台响应变化仍映射为 `platform_changed`。
 
-## Testing
+## 测试
 
-Native tests:
+native 测试：
 
-- Existing partial file plus `206 Partial Content` appends only missing bytes.
-- Existing partial file plus `200 OK` restarts that stream.
-- `416` with matching expected size treats the stream as complete.
-- Pause keeps the task workspace; completion deletes it.
-- Delete only removes the task workspace.
-- Merge restart after pause reuses complete `.part` files.
+- 已有 partial 文件加 `206 Partial Content` 时，只追加缺失字节。
+- 已有 partial 文件加 `200 OK` 时，重新下载该流。
+- `416` 且本地大小等于预期大小时，将该流视为已完成。
+- pause 保留任务工作目录；completion 删除任务工作目录。
+- delete 只删除任务工作目录。
+- pause 后重跑 merge 会复用完整 `.part` 文件。
 
-yt-dlp tests:
+yt-dlp 测试：
 
-- `ytdlp_download_args` includes `--continue` and never includes `--no-continue`.
-- A fake `yt-dlp` process can be aborted by `pause_task`, leaving partial files and persisting `paused`.
-- Starting a paused `yt-dlp` task invokes the same output template.
-- Deleting a `yt-dlp` task cleans only derived task-owned partial files.
-- `create_task` and `run_task` no longer return `engine_missing` when configured `yt-dlp.exe` exists.
+- `ytdlp_download_args` 包含 `--continue`，且绝不包含 `--no-continue`。
+- fake `yt-dlp` 进程能被 `pause_task` abort，留下 partial 文件并持久化 `paused`。
+- 开始 paused `yt-dlp` 任务会调用同一个 output template。
+- 删除 `yt-dlp` 任务只清理派生出的任务自有 partial 文件。
+- 当配置好的 `yt-dlp.exe` 存在时，`create_task` 和 `run_task` 不再返回 `engine_missing`。
 
-End-to-end gates:
+端到端门禁：
 
 - `cargo test`
 - `cargo check`
@@ -154,17 +154,17 @@ End-to-end gates:
 - `git diff --check`
 - `npm run tauri:build`
 
-## Out Of Scope
+## 不在本次范围内
 
-- True resume of an in-progress ffmpeg merge.
-- Cross-engine resume file compatibility between `native` and `yt-dlp`.
-- Per-task engine selection in the create form or child rows.
-- Automatic retry policy changes.
-- Remote/cloud sync of partial download state.
+- 对正在进行中的 ffmpeg merge 做真正断点续传。
+- 在 `native` 和 `yt-dlp` 之间复用同一套 resume 文件格式。
+- 在创建表单或子任务行里增加单任务内核选择。
+- 改动自动重试策略。
+- partial 下载状态的远程/云端同步。
 
-## Open Risks
+## 开放风险
 
-- Bilibili CDN URLs may expire or change range support; the native implementation must re-fetch playurl and safely restart unsupported streams.
-- Some `yt-dlp` formats may produce additional sidecar files; cleanup must be conservative to avoid deleting user files.
-- Disk-space failures during append can leave partials; future starts should either resume or restart safely.
-- Existing installed databases may contain paused tasks without resume metadata; those tasks should continue by restarting cleanly.
+- Bilibili CDN URL 可能过期或改变 Range 支持；native 实现必须重新获取 playurl，并对不支持续传的流安全重下。
+- 某些 `yt-dlp` format 可能产生额外 sidecar 文件；清理必须保守，避免删除用户文件。
+- append 过程中磁盘空间不足可能留下 partial；后续开始应能安全续传或重新下载。
+- 已安装数据库里可能已有缺少 resume metadata 的 paused 任务；这些任务应通过干净重下继续运行。

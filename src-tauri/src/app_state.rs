@@ -57,6 +57,10 @@ impl AppState {
             .is_some()
     }
 
+    pub fn is_task_active(&self, task_id: Uuid) -> bool {
+        self.active_runs.lock().unwrap().contains_key(&task_id)
+    }
+
     pub fn clear_task_abort(&self, task_id: Uuid) {
         self.active_runs.lock().unwrap().remove(&task_id);
     }

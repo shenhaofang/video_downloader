@@ -1,6 +1,7 @@
 use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::platform::{DownloadEvent, EventSink};
 use futures_util::StreamExt;
+use reqwest::StatusCode;
 use serde::Deserialize;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
@@ -150,33 +151,116 @@ pub async fn download_to_file(
     path: &Path,
     sink: &dyn EventSink,
 ) -> AppResult<u64> {
-    let response = bilibili_get(client, url)
-        .send()
-        .await
-        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?
-        .error_for_status()
-        .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
-    let total = response.content_length();
-    let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(path)
-        .await
-        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
-    let mut downloaded = 0_u64;
+    download_to_file_resumable(client, url, path, sink).await
+}
 
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
-        file.write_all(&chunk)
+pub async fn download_to_file_resumable(
+    client: &reqwest::Client,
+    url: &str,
+    path: &Path,
+    sink: &dyn EventSink,
+) -> AppResult<u64> {
+    let mut existing_size = std::fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+
+    loop {
+        let mut request = bilibili_get(client, url);
+        if existing_size > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={existing_size}-"));
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+        let status = response.status();
+        if status == StatusCode::RANGE_NOT_SATISFIABLE {
+            if content_range_total(response.headers()) == Some(existing_size) && existing_size > 0 {
+                return Ok(existing_size);
+            }
+            std::fs::remove_file(path).ok();
+            existing_size = 0;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(AppError::structured(
+                ErrorCode::NetworkError,
+                format!("download failed with status {status}"),
+            ));
+        }
+
+        let content_range = parse_content_range(response.headers());
+        let append = status == StatusCode::PARTIAL_CONTENT
+            && existing_size > 0
+            && content_range.as_ref().and_then(|range| range.start) == Some(existing_size);
+        if status == StatusCode::PARTIAL_CONTENT
+            && existing_size > 0
+            && !append
+            && content_range.as_ref().and_then(|range| range.start) != Some(0)
+        {
+            std::fs::remove_file(path).ok();
+            existing_size = 0;
+            continue;
+        }
+        let downloaded_offset = if append { existing_size } else { 0 };
+        let total = response
+            .content_length()
+            .map(|length| length + downloaded_offset)
+            .or_else(|| content_range.as_ref().map(|range| range.total));
+        let mut stream = response.bytes_stream();
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(append)
+            .truncate(!append)
+            .open(path)
             .await
             .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
-        downloaded += chunk.len() as u64;
-        sink.emit(DownloadEvent::Progress { downloaded, total });
-    }
-    file.flush()
-        .await
-        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+        let mut downloaded = downloaded_offset;
 
-    Ok(downloaded)
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk
+                .map_err(|err| AppError::structured(ErrorCode::NetworkError, err.to_string()))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+            downloaded += chunk.len() as u64;
+            sink.emit(DownloadEvent::Progress { downloaded, total });
+        }
+        file.flush()
+            .await
+            .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+
+        return Ok(downloaded);
+    }
+}
+
+fn content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    parse_content_range(headers).map(|range| range.total)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRange {
+    start: Option<u64>,
+    total: u64,
+}
+
+fn parse_content_range(headers: &reqwest::header::HeaderMap) -> Option<ContentRange> {
+    let value = headers.get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?;
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.rsplit_once('/')?;
+    let start = if range == "*" {
+        None
+    } else {
+        Some(range.split_once('-')?.0.parse().ok()?)
+    };
+    Some(ContentRange {
+        start,
+        total: total.parse().ok()?,
+    })
 }
 
 fn bilibili_get(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
@@ -446,6 +530,114 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn resumes_stream_from_existing_partial_with_range_response() {
+        let url = one_shot_range_http_url(
+            Some("bytes=6-"),
+            "206 Partial Content",
+            vec![("Content-Length", "5"), ("Content-Range", "bytes 6-10/11")],
+            b"bytes".to_vec(),
+        );
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("video.m4s");
+        fs::write(&target, b"media-").unwrap();
+
+        let bytes = download_to_file_resumable(
+            &reqwest::Client::new(),
+            &url,
+            &target,
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes, 11);
+        assert_eq!(fs::read(&target).unwrap(), b"media-bytes");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn restarts_stream_when_partial_content_range_starts_at_wrong_offset() {
+        let url = one_shot_range_http_url(
+            Some("bytes=5-"),
+            "206 Partial Content",
+            vec![("Content-Length", "5"), ("Content-Range", "bytes 0-4/5")],
+            b"fresh".to_vec(),
+        );
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("video.m4s");
+        fs::write(&target, b"stale").unwrap();
+
+        let bytes = download_to_file_resumable(
+            &reqwest::Client::new(),
+            &url,
+            &target,
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes, 5);
+        assert_eq!(fs::read(&target).unwrap(), b"fresh");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn restarts_stream_when_range_request_returns_full_response() {
+        let url = one_shot_range_http_url(
+            Some("bytes=5-"),
+            "200 OK",
+            vec![("Content-Length", "5")],
+            b"fresh".to_vec(),
+        );
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("video.m4s");
+        fs::write(&target, b"stale").unwrap();
+
+        let bytes = download_to_file_resumable(
+            &reqwest::Client::new(),
+            &url,
+            &target,
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes, 5);
+        assert_eq!(fs::read(&target).unwrap(), b"fresh");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn treats_matching_416_range_response_as_complete() {
+        let url = one_shot_range_http_url(
+            Some("bytes=4-"),
+            "416 Range Not Satisfiable",
+            vec![("Content-Length", "0"), ("Content-Range", "bytes */4")],
+            Vec::new(),
+        );
+        let dir = temp_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("video.m4s");
+        fs::write(&target, b"done").unwrap();
+
+        let bytes = download_to_file_resumable(
+            &reqwest::Client::new(),
+            &url,
+            &target,
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes, 4);
+        assert_eq!(fs::read(&target).unwrap(), b"done");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[derive(Default)]
     struct RecordingSink {
         events: Arc<Mutex<Vec<DownloadEvent>>>,
@@ -537,6 +729,37 @@ mod tests {
             }
         });
         format!("http://{address}/guarded")
+    }
+
+    fn one_shot_range_http_url(
+        expected_range: Option<&'static str>,
+        status: &'static str,
+        headers: Vec<(&'static str, &'static str)>,
+        body: Vec<u8>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            if let Some(range) = expected_range {
+                assert!(
+                    request
+                        .lines()
+                        .any(|line| line.eq_ignore_ascii_case(&format!("range: {range}"))),
+                    "missing expected Range header {range}; request was {request}"
+                );
+            }
+            write!(stream, "HTTP/1.1 {status}\r\n").unwrap();
+            for (name, value) in headers {
+                write!(stream, "{name}: {value}\r\n").unwrap();
+            }
+            write!(stream, "Connection: close\r\n\r\n").unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        format!("http://{address}/range")
     }
 
     fn temp_test_dir() -> PathBuf {

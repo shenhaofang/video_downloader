@@ -7,6 +7,7 @@ use crate::errors::{AppError, AppResult, ErrorCode};
 use crate::models::{AppConfig, DownloadEngine, DownloadTask, TaskState};
 use crate::platform::bilibili::native::NativeBilibiliDownloader;
 use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
+use crate::platform::bilibili::yt_dlp::{require_ytdlp, YtDlpDownloader};
 use crate::platform::{PlatformDownloader, ProbeInput, ProbeResult};
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
 use futures_util::future::{AbortHandle, Abortable};
@@ -284,10 +285,12 @@ async fn create_task_from_state(
             create_task_with_downloader_from_state(state, input, config.default_engine, &downloader)
                 .await
         }
-        DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
-            crate::errors::ErrorCode::EngineMissing,
-            "yt-dlp task creation is not wired yet",
-        )),
+        DownloadEngine::YtDlp => {
+            let ytdlp_path = require_ytdlp(config.ytdlp_path.as_deref())?;
+            let downloader = YtDlpDownloader::new(ytdlp_path);
+            create_task_with_downloader_from_state(state, input, config.default_engine, &downloader)
+                .await
+        }
     }
 }
 
@@ -345,10 +348,33 @@ async fn list_task_groups_from_state(state: &AppState) -> AppResult<Vec<CreatedT
     let mut results = Vec::with_capacity(groups.len());
     for group in groups {
         let tasks = state.storage.load_tasks_for_group(group.id).await?;
+        let tasks = recover_stale_active_tasks(state, tasks).await?;
         results.push(CreatedTaskGroup { group, tasks });
     }
 
     Ok(results)
+}
+
+async fn recover_stale_active_tasks(
+    state: &AppState,
+    tasks: Vec<DownloadTask>,
+) -> AppResult<Vec<DownloadTask>> {
+    let mut recovered = Vec::with_capacity(tasks.len());
+    for mut task in tasks {
+        if is_runtime_active_state(task.state) && !state.is_task_active(task.id) {
+            task.state = TaskState::Interrupted;
+            state.storage.update_task(&task).await?;
+        }
+        recovered.push(task);
+    }
+    Ok(recovered)
+}
+
+fn is_runtime_active_state(state: TaskState) -> bool {
+    matches!(
+        state,
+        TaskState::Pending | TaskState::Probing | TaskState::Downloading | TaskState::Merging
+    )
 }
 
 async fn run_task_from_state(
@@ -405,9 +431,114 @@ async fn delete_task_from_state(
     input: RunTaskCommand,
 ) -> AppResult<Vec<CreatedTaskGroup>> {
     let task = load_task_from_command(state, &input).await?;
-    state.abort_task(task.id);
+    let was_active = state.abort_task(task.id);
+    let cleanup_result = cleanup_task_resume_files(&task);
+    if !was_active {
+        cleanup_result?;
+    }
     state.storage.delete_task(task.id).await?;
     list_task_groups_from_state(state).await
+}
+
+fn cleanup_task_resume_files(task: &DownloadTask) -> AppResult<()> {
+    match task.engine {
+        DownloadEngine::Native => {
+            let output_path = Path::new(&task.output_file);
+            let workspace = output_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(".video-downloader")
+                .join(task.id.to_string());
+            remove_dir_if_exists(&workspace)?;
+        }
+        DownloadEngine::YtDlp => {
+            for path in ytdlp_partial_paths(Path::new(&task.output_file)) {
+                remove_file_if_exists(&path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ytdlp_partial_paths(output_path: &Path) -> Vec<PathBuf> {
+    let output = output_path.to_string_lossy();
+    let mut paths: Vec<PathBuf> = [".part", ".ytdl", ".temp", ".frag"]
+        .into_iter()
+        .map(|suffix| PathBuf::from(format!("{output}{suffix}")))
+        .collect();
+    let Some(parent) = output_path.parent() else {
+        return paths;
+    };
+    let Some(stem) = output_path.file_stem().and_then(|value| value.to_str()) else {
+        return paths;
+    };
+    let Some(file_name) = output_path.file_name().and_then(|value| value.to_str()) else {
+        return paths;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || paths.contains(&path) {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if is_ytdlp_partial_name(name, stem, file_name) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn is_ytdlp_partial_name(name: &str, output_stem: &str, output_file_name: &str) -> bool {
+    if name.starts_with(output_file_name) {
+        return name.ends_with(".part")
+            || name.ends_with(".ytdl")
+            || name.ends_with(".temp")
+            || name.ends_with(".frag")
+            || name.contains(".part-");
+    }
+
+    let Some(rest) = name.strip_prefix(output_stem) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(".f") else {
+        return false;
+    };
+    let format_id_len = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .count();
+    if format_id_len == 0 {
+        return false;
+    }
+    let suffix = &rest[format_id_len..];
+    suffix.ends_with(".part") || suffix.contains(".part-")
+}
+
+fn remove_file_if_exists(path: &Path) -> AppResult<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(AppError::structured(
+            ErrorCode::FilesystemError,
+            err.to_string(),
+        )),
+    }
+}
+
+fn remove_dir_if_exists(path: &Path) -> AppResult<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(AppError::structured(
+            ErrorCode::FilesystemError,
+            err.to_string(),
+        )),
+    }
 }
 
 async fn run_task_from_state_mode(
@@ -429,10 +560,12 @@ async fn run_task_from_state_mode(
             let downloader = NativeBilibiliDownloader::with_ffmpeg_path(ffmpeg_path);
             run_task_with_downloader_from_state_mode(state, input, &downloader, allow_paused).await
         }
-        DownloadEngine::YtDlp => Err(crate::errors::AppError::structured(
-            crate::errors::ErrorCode::EngineMissing,
-            "yt-dlp task execution is not wired yet",
-        )),
+        DownloadEngine::YtDlp => {
+            let config = state.storage.load_config().await?;
+            let ytdlp_path = require_ytdlp(config.ytdlp_path.as_deref())?;
+            let downloader = YtDlpDownloader::new(ytdlp_path);
+            run_task_with_downloader_from_state_mode(state, input, &downloader, allow_paused).await
+        }
     }
 }
 
@@ -746,6 +879,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_and_run_task_from_state_uses_configured_ytdlp() {
+        let state = command_test_state().await;
+        let dir = command_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let ytdlp = dir.join("fake-ytdlp.bat");
+        fs::write(
+            &ytdlp,
+            "@echo off\r\necho %* | findstr /C:\"--dump-json\" >nul\r\nif %errorlevel%==0 (\r\n  echo {\"title\":\"YTDLP Sample\",\"filesize\":123}\r\n  exit /b 0\r\n)\r\necho downloaded with continue\r\nexit /b 0\r\n",
+        )
+        .unwrap();
+        state
+            .storage
+            .save_config(&AppConfig {
+                download_root: dir.to_string_lossy().to_string(),
+                default_engine: DownloadEngine::YtDlp,
+                ytdlp_path: Some(ytdlp.to_string_lossy().to_string()),
+                ..AppConfig::default()
+            })
+            .await
+            .unwrap();
+
+        let created = create_task_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: dir.to_string_lossy().to_string(),
+                has_login: false,
+                selected_pages: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.group.engine, DownloadEngine::YtDlp);
+        assert_eq!(created.tasks.len(), 1);
+        assert_eq!(created.tasks[0].engine, DownloadEngine::YtDlp);
+        assert_eq!(created.tasks[0].title, "YTDLP Sample");
+        assert_eq!(created.tasks[0].bvid, None);
+
+        let updated = run_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: created.tasks[0].id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.state, TaskState::Completed);
+        let logs = state
+            .storage
+            .load_logs_for_task(created.tasks[0].id)
+            .await
+            .unwrap();
+        assert!(logs
+            .iter()
+            .any(|line| line.contains("downloaded with continue")));
+        cleanup_state(state).await;
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn probe_bilibili_pages_from_state_returns_items_without_persisting_tasks() {
         let state = command_test_state().await;
 
@@ -1002,6 +1197,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_task_from_state_removes_native_resume_workspace() {
+        let state = command_test_state().await;
+        let dir = command_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: dir.to_string_lossy().to_string(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+        let workspace = std::path::Path::new(&task.output_file)
+            .parent()
+            .unwrap()
+            .join(".video-downloader")
+            .join(task.id.to_string());
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("video.part"), b"partial").unwrap();
+
+        delete_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!workspace.exists());
+        cleanup_state(state).await;
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_active_task_tolerates_resume_cleanup_failure() {
+        let state = command_test_state().await;
+        let dir = command_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: dir.to_string_lossy().to_string(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+        let workspace = std::path::Path::new(&task.output_file)
+            .parent()
+            .unwrap()
+            .join(".video-downloader")
+            .join(task.id.to_string());
+        fs::create_dir_all(workspace.parent().unwrap()).unwrap();
+        fs::write(&workspace, b"not a directory").unwrap();
+        let (abort_handle, _abort_registration) = AbortHandle::new_pair();
+        assert!(state.register_task_abort(task.id, abort_handle));
+
+        let groups = delete_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(groups.is_empty());
+        assert!(state.storage.load_task_groups().await.unwrap().is_empty());
+        cleanup_state(state).await;
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_task_from_state_removes_ytdlp_partial_files() {
+        let state = command_test_state().await;
+        let dir = command_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: dir.to_string_lossy().to_string(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::YtDlp,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let task = created.tasks[0].clone();
+        fs::create_dir_all(std::path::Path::new(&task.output_file).parent().unwrap()).unwrap();
+        let partial = format!("{}.part", task.output_file);
+        let ytdl = format!("{}.ytdl", task.output_file);
+        let user_note = std::path::Path::new(&task.output_file).with_file_name(format!(
+            "{}.notes.part",
+            std::path::Path::new(&task.output_file)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+        ));
+        let format_video = std::path::Path::new(&task.output_file).with_file_name(format!(
+            "{}.f137.mp4.part",
+            std::path::Path::new(&task.output_file)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+        ));
+        let fragment = std::path::Path::new(&task.output_file).with_file_name(format!(
+            "{}.mp4.part-Frag10.part",
+            std::path::Path::new(&task.output_file)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+        ));
+        fs::write(&partial, b"partial").unwrap();
+        fs::write(&ytdl, b"state").unwrap();
+        fs::write(&user_note, b"user note").unwrap();
+        fs::write(&format_video, b"partial video").unwrap();
+        fs::write(&fragment, b"partial fragment").unwrap();
+
+        delete_task_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!std::path::Path::new(&partial).exists());
+        assert!(!std::path::Path::new(&ytdl).exists());
+        assert!(!format_video.exists());
+        assert!(!fragment.exists());
+        assert!(user_note.exists());
+        cleanup_state(state).await;
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn run_task_from_state_persists_missing_ffmpeg_failure_for_native_task() {
         let state = command_test_state().await;
         let created = create_task_with_downloader_from_state(
@@ -1055,6 +1402,122 @@ mod tests {
         let groups = list_task_groups_from_state(&state).await.unwrap();
 
         assert_eq!(groups, vec![created]);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn list_task_groups_from_state_marks_stale_active_tasks_interrupted() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &MockDownloader,
+        )
+        .await
+        .unwrap();
+        let mut downloading = created.tasks[0].clone();
+        downloading.state = TaskState::Downloading;
+        downloading.bytes_downloaded = 25;
+        downloading.bytes_total = Some(100);
+        state.storage.update_task(&downloading).await.unwrap();
+        let mut merging = created.tasks[1].clone();
+        merging.state = TaskState::Merging;
+        merging.bytes_downloaded = 100;
+        merging.bytes_total = Some(100);
+        state.storage.update_task(&merging).await.unwrap();
+
+        let groups = list_task_groups_from_state(&state).await.unwrap();
+        let tasks = &groups[0].tasks;
+
+        assert_eq!(tasks[0].state, TaskState::Interrupted);
+        assert_eq!(tasks[1].state, TaskState::Interrupted);
+        assert_eq!(tasks[2].state, TaskState::Queued);
+        assert_eq!(
+            state.storage.load_task(downloading.id).await.unwrap().state,
+            TaskState::Interrupted
+        );
+        assert_eq!(
+            state.storage.load_task(merging.id).await.unwrap().state,
+            TaskState::Interrupted
+        );
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn list_task_groups_from_state_keeps_live_active_tasks_running() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let mut task = created.tasks[0].clone();
+        task.state = TaskState::Downloading;
+        state.storage.update_task(&task).await.unwrap();
+        let (abort_handle, _abort_registration) = AbortHandle::new_pair();
+        assert!(state.register_task_abort(task.id, abort_handle));
+
+        let groups = list_task_groups_from_state(&state).await.unwrap();
+
+        assert_eq!(groups[0].tasks[0].state, TaskState::Downloading);
+        assert_eq!(
+            state.storage.load_task(task.id).await.unwrap().state,
+            TaskState::Downloading
+        );
+        state.clear_task_abort(task.id);
+        cleanup_state(state).await;
+    }
+
+    #[tokio::test]
+    async fn start_task_runs_after_stale_active_task_is_recovered() {
+        let state = command_test_state().await;
+        let created = create_task_with_downloader_from_state(
+            &state,
+            CreateTaskCommand {
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".into(),
+                output_dir: "D:\\Videos".into(),
+                has_login: false,
+                selected_pages: None,
+            },
+            DownloadEngine::Native,
+            &RecordingDownloader,
+        )
+        .await
+        .unwrap();
+        let mut task = created.tasks[0].clone();
+        task.state = TaskState::Downloading;
+        state.storage.update_task(&task).await.unwrap();
+
+        let listed = list_task_groups_from_state(&state).await.unwrap();
+        assert_eq!(listed[0].tasks[0].state, TaskState::Interrupted);
+
+        let downloader = CommandRunDownloader::default();
+        let started = start_task_with_downloader_from_state(
+            &state,
+            RunTaskCommand {
+                task_id: task.id.to_string(),
+            },
+            &downloader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(started.state, TaskState::Completed);
+        assert!(downloader.input().is_some());
         cleanup_state(state).await;
     }
 

@@ -92,6 +92,7 @@ export interface AppState {
   platforms: PlatformLoginRow[];
   expandedPlatforms: Set<string>;
   taskGroups: CreatedTaskGroup[];
+  autoRunPausedTaskIds: Set<string>;
   pagePreview: PagePreviewState;
   bilibiliLogin: BilibiliLoginState;
   toolStatus: ToolStatus;
@@ -111,6 +112,7 @@ export function createInitialState(): AppState {
     platforms: [{ platform: "bilibili", status: "未登录" }],
     expandedPlatforms: new Set<string>(),
     taskGroups: [],
+    autoRunPausedTaskIds: new Set<string>(),
     pagePreview: emptyPagePreviewState(),
     bilibiliLogin: {
       qrcodeKey: null,
