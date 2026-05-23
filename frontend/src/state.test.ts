@@ -15,6 +15,13 @@ describe("state defaults", () => {
       ffmpeg: "missing",
       ffprobe: "missing",
     });
+    expect(state.update).toEqual({
+      phase: "idle",
+      currentVersion: "0.1.0",
+      latestVersion: null,
+      notes: null,
+      error: null,
+    });
   });
 
   test("prefills task output directory from the default root", () => {

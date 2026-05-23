@@ -103,16 +103,25 @@ pub fn installer_managed_media_tool_path(tool: &str) -> AppResult<PathBuf> {
     installer_managed_media_tool_path_from_exe(&exe, tool)
 }
 
+pub fn installer_managed_media_tool_root() -> AppResult<PathBuf> {
+    let exe = std::env::current_exe()
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    installer_managed_media_tool_root_from_exe(&exe)
+}
+
+pub fn installer_managed_media_tool_root_from_exe(exe_path: &Path) -> AppResult<PathBuf> {
+    Ok(app_install_dir_from_exe(exe_path)?
+        .join("dependencies")
+        .join("ffmpeg"))
+}
+
 pub fn installer_managed_media_tool_path_from_exe(
     exe_path: &Path,
     tool: &str,
 ) -> AppResult<PathBuf> {
     let name = media_tool_name(tool)?;
-    let exe_dir = app_install_dir_from_exe(exe_path)?;
 
-    Ok(exe_dir
-        .join("dependencies")
-        .join("ffmpeg")
+    Ok(installer_managed_media_tool_root_from_exe(exe_path)?
         .join("bin")
         .join(format!("{name}.exe")))
 }
@@ -318,12 +327,20 @@ mod tests {
 
     #[test]
     fn builds_installer_managed_media_tool_path_under_install_root_dependencies() {
+        let root = installer_managed_media_tool_root_from_exe(Path::new(
+            "C:\\Users\\me\\AppData\\Local\\Video Downloader\\video-downloader.exe",
+        ))
+        .unwrap();
         let path = installer_managed_media_tool_path_from_exe(
             Path::new("C:\\Users\\me\\AppData\\Local\\Video Downloader\\video-downloader.exe"),
             "ffmpeg",
         )
         .unwrap();
 
+        assert_eq!(
+            root,
+            PathBuf::from("C:\\Users\\me\\AppData\\Local\\Video Downloader\\dependencies\\ffmpeg")
+        );
         assert_eq!(
             path,
             PathBuf::from(
@@ -416,22 +433,42 @@ mod tests {
     }
 
     #[test]
-    fn tauri_config_bundles_media_tools_for_nsis_without_external_bins() {
+    fn tauri_config_uses_updater_and_keeps_media_tools_out_of_app_bundle() {
         let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         let text = fs::read_to_string(config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let resources = json["bundle"]["resources"].as_array().unwrap();
+        let resources = json["bundle"]["resources"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
 
         assert_eq!(json["bundle"]["externalBin"], serde_json::Value::Null);
         assert_eq!(json["bundle"]["targets"], serde_json::json!(["nsis"]));
         assert_eq!(
+            json["bundle"]["createUpdaterArtifacts"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
             json["bundle"]["windows"]["nsis"]["installerHooks"],
             serde_json::json!("windows/hooks.nsh")
         );
-        assert!(resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
-        assert!(resources.contains(&serde_json::json!(
+        assert!(!resources.contains(&serde_json::json!(
             "resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip"
         )));
+        assert!(!resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
+        assert_eq!(
+            json["plugins"]["updater"]["endpoints"][0],
+            serde_json::json!(
+                "https://github.com/shenhaofang/video_downloader/releases/latest/download/latest.json"
+            )
+        );
+        assert_eq!(
+            json["plugins"]["updater"]["windows"]["installMode"],
+            serde_json::json!("passive")
+        );
+        assert!(json["plugins"]["updater"]["pubkey"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
     }
 
     #[test]
@@ -540,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn nsis_hook_installs_bundled_media_tools_and_cleans_them_on_uninstall() {
+    fn nsis_hook_leaves_media_tools_to_settings_and_cleans_them_on_uninstall() {
         let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("windows")
             .join("hooks.nsh");
@@ -550,10 +587,9 @@ mod tests {
         assert!(!text.contains("NSISdl::download"));
         assert!(!text.contains("-ArchiveUrl"));
         assert!(text.contains("SetDetailsView show"));
-        assert!(text.contains("DetailPrint \"Installing bundled FFmpeg media tools"));
-        assert!(text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
-        assert!(text.contains("install-media-tools.ps1"));
-        assert!(text.contains("-InstallRoot \"$INSTDIR\\dependencies\\ffmpeg\""));
+        assert!(text.contains("Application dependencies are managed from Settings"));
+        assert!(!text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
+        assert!(!text.contains("install-media-tools.ps1"));
         assert!(text.contains("!macro NSIS_HOOK_PREUNINSTALL"));
         assert!(text.contains("RMDir /r \"$INSTDIR\\dependencies\""));
         assert!(text.contains("DeleteRegKey SHCTX \"${MANUPRODUCTKEY}\""));
@@ -571,23 +607,6 @@ mod tests {
         assert!(text.contains("$DESKTOP\\${PRODUCTNAME}.lnk"));
         assert!(text.contains("$SMPROGRAMS\\${PRODUCTNAME}.lnk"));
         assert!(text.contains("SHChangeNotify"));
-    }
-
-    #[test]
-    fn dependency_install_script_verifies_bundled_archive_before_extracting() {
-        let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("resources")
-            .join("install-media-tools.ps1");
-        let text = fs::read_to_string(script_path).unwrap();
-
-        assert!(!text.contains("ArchiveUrl"));
-        assert!(!text.contains("HttpClient"));
-        assert!(!text.contains("curl.exe"));
-        assert!(text.contains("ExpectedSha256"));
-        assert!(text.contains("Get-FileHash"));
-        assert!(text.contains("Expand-Archive"));
-        assert!(text.contains("ffmpeg.exe"));
-        assert!(text.contains("ffprobe.exe"));
     }
 
     #[test]

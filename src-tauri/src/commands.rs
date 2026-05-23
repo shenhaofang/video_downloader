@@ -10,14 +10,20 @@ use crate::platform::bilibili::yt_dlp::{detect_ytdlp, YtDlpStatus};
 use crate::platform::bilibili::yt_dlp::{require_ytdlp, YtDlpDownloader};
 use crate::platform::{PlatformDownloader, ProbeInput, ProbeResult};
 use crate::task::{create_group_from_probe, CreateTaskRequest, CreatedTaskGroup};
+use crate::updater::AppUpdateStatus;
 use futures_util::future::{AbortHandle, Abortable};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const YTDLP_DOWNLOAD_URL: &str =
     "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+const FFMPEG_DOWNLOAD_URL: &str =
+    "https://github.com/shenhaofang/video_downloader/releases/latest/download/ffmpeg-win64-lgpl.zip";
+const FFMPEG_ARCHIVE_SHA256: &str =
+    "d3c0d41c26b64bb42abbf9051a9494bc67185b6d9fa57798f20efb0e0213caf7";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskCommand {
@@ -167,6 +173,21 @@ pub async fn install_ytdlp(state: tauri::State<'_, AppState>) -> AppResult<AppCo
     install_ytdlp_from_state(state.inner()).await
 }
 
+#[tauri::command]
+pub async fn install_media_tools(state: tauri::State<'_, AppState>) -> AppResult<AppConfig> {
+    install_media_tools_from_state(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn check_app_update(app: tauri::AppHandle) -> AppResult<AppUpdateStatus> {
+    crate::updater::check_app_update(&app).await
+}
+
+#[tauri::command]
+pub async fn install_app_update(app: tauri::AppHandle) -> AppResult<()> {
+    crate::updater::install_app_update(&app).await
+}
+
 async fn get_config_from_state(state: &AppState) -> AppResult<AppConfig> {
     let config = state.storage.load_config().await?;
     config_with_installer_managed_tool_defaults(config)
@@ -201,11 +222,16 @@ fn existing_or_default_tool_path(path: Option<String>, default_path: PathBuf) ->
 }
 
 async fn install_ytdlp_from_state(state: &AppState) -> AppResult<AppConfig> {
-    let bytes = download_ytdlp_bytes(YTDLP_DOWNLOAD_URL).await?;
+    let bytes = download_url_bytes(YTDLP_DOWNLOAD_URL, "yt-dlp").await?;
     install_ytdlp_bytes_from_state(state, bytes).await
 }
 
-async fn download_ytdlp_bytes(url: &str) -> AppResult<Vec<u8>> {
+async fn install_media_tools_from_state(state: &AppState) -> AppResult<AppConfig> {
+    let bytes = download_url_bytes(FFMPEG_DOWNLOAD_URL, "FFmpeg").await?;
+    install_media_tools_bytes_from_state(state, bytes).await
+}
+
+async fn download_url_bytes(url: &str, label: &str) -> AppResult<Vec<u8>> {
     let response = reqwest::Client::new()
         .get(url)
         .header(reqwest::header::USER_AGENT, "video-downloader")
@@ -216,7 +242,7 @@ async fn download_ytdlp_bytes(url: &str) -> AppResult<Vec<u8>> {
     if !response.status().is_success() {
         return Err(AppError::structured(
             ErrorCode::NetworkError,
-            format!("yt-dlp download failed with status {}", response.status()),
+            format!("{label} download failed with status {}", response.status()),
         ));
     }
 
@@ -227,7 +253,7 @@ async fn download_ytdlp_bytes(url: &str) -> AppResult<Vec<u8>> {
     if bytes.is_empty() {
         return Err(AppError::structured(
             ErrorCode::NetworkError,
-            "yt-dlp download returned an empty file",
+            format!("{label} download returned an empty file"),
         ));
     }
 
@@ -272,6 +298,151 @@ async fn install_ytdlp_bytes_to_path_from_state(
     let config = config_with_installer_managed_tool_defaults(config)?;
     state.storage.save_config(&config).await?;
     Ok(config)
+}
+
+async fn install_media_tools_bytes_from_state(
+    state: &AppState,
+    bytes: Vec<u8>,
+) -> AppResult<AppConfig> {
+    let install_root = crate::media::installer_managed_media_tool_root()?;
+    install_media_tools_bytes_to_path_from_state(state, bytes, install_root).await
+}
+
+async fn install_media_tools_bytes_to_path_from_state(
+    state: &AppState,
+    bytes: Vec<u8>,
+    install_root: PathBuf,
+) -> AppResult<AppConfig> {
+    install_media_tools_archive_to_path(&bytes, FFMPEG_ARCHIVE_SHA256, &install_root)?;
+
+    let ffmpeg_path = install_root.join("bin").join("ffmpeg.exe");
+    let ffprobe_path = install_root.join("bin").join("ffprobe.exe");
+    let mut config = state.storage.load_config().await?;
+    config.ffmpeg_path = Some(ffmpeg_path.to_string_lossy().to_string());
+    config.ffprobe_path = Some(ffprobe_path.to_string_lossy().to_string());
+    let config = crate::config::with_normalized_concurrency(config);
+    let config = config_with_installer_managed_tool_defaults(config)?;
+    state.storage.save_config(&config).await?;
+    Ok(config)
+}
+
+fn install_media_tools_archive_to_path(
+    bytes: &[u8],
+    expected_sha256: &str,
+    install_root: &Path,
+) -> AppResult<()> {
+    verify_archive_sha256(bytes, expected_sha256)?;
+
+    let parent = install_root.parent().ok_or_else(|| {
+        AppError::structured(
+            ErrorCode::FilesystemError,
+            "FFmpeg install path has no parent directory",
+        )
+    })?;
+    std::fs::create_dir_all(parent)
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    let temp_root = parent.join(format!(".ffmpeg-install-{}", Uuid::new_v4()));
+    if temp_root.exists() {
+        std::fs::remove_dir_all(&temp_root)
+            .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+    }
+    std::fs::create_dir_all(&temp_root)
+        .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+
+    let result = extract_ffmpeg_archive(bytes, &temp_root).and_then(|_| {
+        ensure_media_tools_exist(&temp_root)?;
+        if install_root.exists() {
+            std::fs::remove_dir_all(install_root)
+                .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+        }
+        std::fs::rename(&temp_root, install_root)
+            .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))
+    });
+
+    if result.is_err() && temp_root.exists() {
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+    result
+}
+
+fn verify_archive_sha256(bytes: &[u8], expected_sha256: &str) -> AppResult<()> {
+    if bytes.is_empty() {
+        return Err(AppError::structured(
+            ErrorCode::NetworkError,
+            "FFmpeg download returned an empty file",
+        ));
+    }
+
+    use sha2::{Digest, Sha256};
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if actual != expected_sha256.to_ascii_lowercase() {
+        return Err(AppError::structured(
+            ErrorCode::UpdateError,
+            format!("FFmpeg archive checksum mismatch. Expected {expected_sha256}, got {actual}"),
+        ));
+    }
+    Ok(())
+}
+
+fn extract_ffmpeg_archive(bytes: &[u8], target_root: &Path) -> AppResult<()> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|err| AppError::structured(ErrorCode::UpdateError, err.to_string()))?;
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|err| AppError::structured(ErrorCode::UpdateError, err.to_string()))?;
+        let enclosed = file.enclosed_name().ok_or_else(|| {
+            AppError::structured(
+                ErrorCode::UpdateError,
+                "FFmpeg archive contains unsafe path",
+            )
+        })?;
+        let relative = strip_archive_root(&enclosed);
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let output = target_root.join(relative);
+        if file.is_dir() {
+            std::fs::create_dir_all(&output)
+                .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+        } else {
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| {
+                    AppError::structured(ErrorCode::FilesystemError, err.to_string())
+                })?;
+            }
+            let mut output_file = std::fs::File::create(&output)
+                .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+            std::io::copy(&mut file, &mut output_file)
+                .map_err(|err| AppError::structured(ErrorCode::FilesystemError, err.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn strip_archive_root(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    if components
+        .next()
+        .is_some_and(|component| component.as_os_str() == "bin")
+    {
+        path.to_path_buf()
+    } else {
+        path.components().skip(1).collect()
+    }
+}
+
+fn ensure_media_tools_exist(root: &Path) -> AppResult<()> {
+    for tool in ["ffmpeg.exe", "ffprobe.exe"] {
+        let path = root.join("bin").join(tool);
+        if !path.is_file() {
+            return Err(AppError::structured(
+                ErrorCode::UpdateError,
+                format!("{tool} missing from FFmpeg archive"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn create_task_from_state(
@@ -1712,6 +1883,63 @@ mod tests {
         assert_eq!(status.ytdlp, "available");
         cleanup_state(state).await;
         fs::remove_dir_all(install_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_media_tools_bytes_from_state_extracts_archive_and_persists_paths() {
+        let state = command_test_state().await;
+        let install_root =
+            std::env::temp_dir().join(format!("vd-ffmpeg-install-{}", uuid::Uuid::new_v4()));
+        let archive = fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("vendor")
+                .join("ffmpeg")
+                .join("ffmpeg-win64-lgpl.zip"),
+        )
+        .unwrap();
+
+        let saved = install_media_tools_bytes_to_path_from_state(
+            &state,
+            archive,
+            install_root.join("dependencies").join("ffmpeg"),
+        )
+        .await
+        .unwrap();
+
+        assert!(saved.ffmpeg_path.as_deref().is_some_and(|path| path
+            .ends_with("dependencies\\ffmpeg\\bin\\ffmpeg.exe")
+            || path.ends_with("dependencies/ffmpeg/bin/ffmpeg.exe")));
+        assert!(saved.ffprobe_path.as_deref().is_some_and(|path| path
+            .ends_with("dependencies\\ffmpeg\\bin\\ffprobe.exe")
+            || path.ends_with("dependencies/ffmpeg/bin/ffprobe.exe")));
+        assert!(install_root
+            .join("dependencies")
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffmpeg.exe")
+            .is_file());
+        assert!(install_root
+            .join("dependencies")
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffprobe.exe")
+            .is_file());
+        cleanup_state(state).await;
+        fs::remove_dir_all(install_root).unwrap();
+    }
+
+    #[test]
+    fn install_media_tools_archive_to_path_rejects_checksum_mismatch() {
+        let install_root =
+            std::env::temp_dir().join(format!("vd-ffmpeg-bad-{}", uuid::Uuid::new_v4()));
+
+        let err =
+            install_media_tools_archive_to_path(b"not a zip", FFMPEG_ARCHIVE_SHA256, &install_root)
+                .unwrap_err();
+
+        assert_eq!(err.code(), crate::errors::ErrorCode::UpdateError);
+        assert!(!install_root.exists());
     }
 
     #[tokio::test]

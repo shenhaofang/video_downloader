@@ -158,6 +158,7 @@ fn error_code_name(code: ErrorCode) -> &'static str {
         ErrorCode::FfmpegError => "ffmpeg_error",
         ErrorCode::FilesystemError => "filesystem_error",
         ErrorCode::PlatformChanged => "platform_changed",
+        ErrorCode::UpdateError => "update_error",
         ErrorCode::UnknownError => "unknown_error",
     }
 }

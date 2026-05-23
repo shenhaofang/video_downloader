@@ -76,6 +76,22 @@ export interface ToolStatus {
   ffprobe: string;
 }
 
+export interface AppUpdateStatus {
+  available: boolean;
+  currentVersion: string;
+  latestVersion: string | null;
+  notes: string | null;
+  pubDate: string | null;
+}
+
+interface TauriAppUpdateStatus {
+  available: boolean;
+  current_version: string;
+  latest_version?: string | null;
+  notes?: string | null;
+  pub_date?: string | null;
+}
+
 export async function getConfig(): Promise<AppSettings> {
   try {
     const config = await invoke<TauriConfig>("get_config");
@@ -109,6 +125,22 @@ export async function installYtDlp(): Promise<AppSettings> {
       return {
         ...fallbackConfig(),
         ytdlpPath: "C:\\Program Files\\Video Downloader\\dependencies\\yt-dlp\\yt-dlp.exe",
+      };
+    }
+    throw error;
+  }
+}
+
+export async function installMediaTools(): Promise<AppSettings> {
+  try {
+    const result = await invoke<TauriConfig>("install_media_tools");
+    return normalizeConfig(result);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return {
+        ...fallbackConfig(),
+        ffmpegPath: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffmpeg.exe",
+        ffprobePath: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffprobe.exe",
       };
     }
     throw error;
@@ -272,6 +304,29 @@ export async function getToolStatus(): Promise<ToolStatus> {
   }
 }
 
+export async function checkAppUpdate(): Promise<AppUpdateStatus> {
+  try {
+    const result = await invoke<TauriAppUpdateStatus>("check_app_update");
+    return normalizeAppUpdateStatus(result);
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return fallbackAppUpdateStatus();
+    }
+    throw error;
+  }
+}
+
+export async function installAppUpdate(): Promise<void> {
+  try {
+    await invoke("install_app_update");
+  } catch (error) {
+    if (isTauriUnavailable(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function isTauriUnavailable(error: unknown): boolean {
   const hasRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   if (hasRuntime) {
@@ -306,6 +361,16 @@ function fallbackToolStatus(): ToolStatus {
     ytdlp: "missing",
     ffmpeg: "missing",
     ffprobe: "missing",
+  };
+}
+
+function fallbackAppUpdateStatus(): AppUpdateStatus {
+  return {
+    available: false,
+    currentVersion: "0.1.0",
+    latestVersion: null,
+    notes: null,
+    pubDate: null,
   };
 }
 
@@ -416,6 +481,16 @@ function normalizeConfig(config: TauriConfig): AppSettings {
     ytdlpPath: config.ytdlp_path ?? null,
     ffmpegPath: config.ffmpeg_path ?? null,
     ffprobePath: config.ffprobe_path ?? null,
+  };
+}
+
+function normalizeAppUpdateStatus(status: TauriAppUpdateStatus): AppUpdateStatus {
+  return {
+    available: status.available,
+    currentVersion: status.current_version,
+    latestVersion: status.latest_version ?? null,
+    notes: status.notes ?? null,
+    pubDate: status.pub_date ?? null,
   };
 }
 

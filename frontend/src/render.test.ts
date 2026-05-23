@@ -1097,6 +1097,88 @@ describe("renderApp", () => {
     });
   });
 
+  test("installs FFmpeg media tools from settings and refreshes status", async () => {
+    const installMediaTools = vi.fn().mockResolvedValue({
+      downloadRoot: "D:\\Videos",
+      concurrency: 2,
+      defaultEngine: "native",
+      ytdlpPath: null,
+      ffmpegPath: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffmpeg.exe",
+      ffprobePath: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffprobe.exe",
+    });
+    const getToolStatus = vi.fn().mockResolvedValue({
+      ytdlp: "missing",
+      ffmpeg: "available",
+      ffprobe: "available",
+    });
+    const state = createInitialState();
+    renderApp(root, state, { installMediaTools, getToolStatus });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='install-media-tools']")?.click();
+
+    await vi.waitFor(() => {
+      expect(installMediaTools).toHaveBeenCalledOnce();
+      expect(root.querySelector<HTMLInputElement>("[data-testid='ffmpeg-path']")?.value).toBe(
+        "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffmpeg.exe",
+      );
+      expect(root.textContent).toContain("ffmpeg可用");
+      expect(root.textContent).toContain("ffprobe可用");
+    });
+  });
+
+  test("checks for app updates and starts install when no tasks are active", async () => {
+    const checkAppUpdate = vi.fn().mockResolvedValue({
+      available: true,
+      currentVersion: "0.1.0",
+      latestVersion: "0.1.1",
+      notes: "修复下载恢复",
+      pubDate: "2026-05-23T00:00:00Z",
+    });
+    const installAppUpdate = vi.fn().mockResolvedValue(undefined);
+    const state = createInitialState();
+    renderApp(root, state, { checkAppUpdate, installAppUpdate });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='check-update']")?.click();
+
+    await vi.waitFor(() => {
+      expect(checkAppUpdate).toHaveBeenCalledOnce();
+      expect(root.textContent).toContain("发现 0.1.1");
+      expect(root.textContent).toContain("修复下载恢复");
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-testid='install-update']")?.click();
+
+    await vi.waitFor(() => {
+      expect(installAppUpdate).toHaveBeenCalledOnce();
+      expect(root.textContent).toContain("正在下载并安装");
+    });
+  });
+
+  test("disables update install while queued or running tasks exist", async () => {
+    const checkAppUpdate = vi.fn().mockResolvedValue({
+      available: true,
+      currentVersion: "0.1.0",
+      latestVersion: "0.1.1",
+      notes: null,
+      pubDate: null,
+    });
+    const state = createInitialState();
+    state.taskGroups = [createdCollectionFixture()];
+    renderApp(root, state, { checkAppUpdate });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='check-update']")?.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector<HTMLButtonElement>("[data-testid='install-update']")?.disabled).toBe(
+        true,
+      );
+      expect(root.textContent).toContain("请先暂停或完成下载任务再更新");
+    });
+  });
+
   test("uses install-root dependency placeholders instead of legacy C tools paths", () => {
     const state = createInitialState();
     renderApp(root, state);

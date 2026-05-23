@@ -13,6 +13,7 @@ pub enum ErrorCode {
     FfmpegError,
     FilesystemError,
     PlatformChanged,
+    UpdateError,
     UnknownError,
 }
 
@@ -74,5 +75,14 @@ mod tests {
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("unsupported_content"));
         assert!(json.contains("native cannot expand this link"));
+    }
+
+    #[test]
+    fn serializes_update_error_code_for_frontend() {
+        let err = AppError::structured(ErrorCode::UpdateError, "update failed");
+        let json = serde_json::to_string(&err).unwrap();
+
+        assert!(json.contains("update_error"));
+        assert!(json.contains("update failed"));
     }
 }

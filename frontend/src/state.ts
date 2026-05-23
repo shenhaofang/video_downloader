@@ -86,6 +86,14 @@ export interface ToolStatus {
   ffprobe: string;
 }
 
+export interface AppUpdateState {
+  phase: "idle" | "checking" | "current" | "available" | "installing" | "error";
+  currentVersion: string;
+  latestVersion: string | null;
+  notes: string | null;
+  error: string | null;
+}
+
 export interface AppState {
   activeTab: TabId;
   settings: AppSettings;
@@ -96,6 +104,7 @@ export interface AppState {
   pagePreview: PagePreviewState;
   bilibiliLogin: BilibiliLoginState;
   toolStatus: ToolStatus;
+  update: AppUpdateState;
 }
 
 export function createInitialState(): AppState {
@@ -127,6 +136,13 @@ export function createInitialState(): AppState {
       ytdlp: "missing",
       ffmpeg: "missing",
       ffprobe: "missing",
+    },
+    update: {
+      phase: "idle",
+      currentVersion: "0.1.0",
+      latestVersion: null,
+      notes: null,
+      error: null,
     },
   };
 }

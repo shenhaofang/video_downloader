@@ -1,7 +1,10 @@
 import {
   clearBilibiliLogin as defaultClearBilibiliLogin,
   createTask as defaultCreateTask,
+  checkAppUpdate as defaultCheckAppUpdate,
   getToolStatus as defaultGetToolStatus,
+  installAppUpdate as defaultInstallAppUpdate,
+  installMediaTools as defaultInstallMediaTools,
   installYtDlp as defaultInstallYtDlp,
   listTaskGroups as defaultListTaskGroups,
   deleteTask as defaultDeleteTask,
@@ -43,7 +46,10 @@ export interface RenderDependencies {
   probeBilibiliPages?: typeof defaultProbeBilibiliPages;
   clearBilibiliLogin?: typeof defaultClearBilibiliLogin;
   installYtDlp?: typeof defaultInstallYtDlp;
+  installMediaTools?: typeof defaultInstallMediaTools;
   getToolStatus?: typeof defaultGetToolStatus;
+  checkAppUpdate?: typeof defaultCheckAppUpdate;
+  installAppUpdate?: typeof defaultInstallAppUpdate;
   listTaskGroups?: typeof defaultListTaskGroups;
   progressPollMs?: number;
   qrPollMs?: number;
@@ -71,7 +77,10 @@ export function renderApp(
   const probeBilibiliPages = dependencies.probeBilibiliPages ?? defaultProbeBilibiliPages;
   const clearBilibiliLogin = dependencies.clearBilibiliLogin ?? defaultClearBilibiliLogin;
   const installYtDlp = dependencies.installYtDlp ?? defaultInstallYtDlp;
+  const installMediaTools = dependencies.installMediaTools ?? defaultInstallMediaTools;
   const getToolStatus = dependencies.getToolStatus ?? defaultGetToolStatus;
+  const checkAppUpdate = dependencies.checkAppUpdate ?? defaultCheckAppUpdate;
+  const installAppUpdate = dependencies.installAppUpdate ?? defaultInstallAppUpdate;
   const listTaskGroups = dependencies.listTaskGroups ?? defaultListTaskGroups;
   const progressPollMs = dependencies.progressPollMs ?? 1000;
   const qrPollMs = dependencies.qrPollMs ?? 2000;
@@ -91,7 +100,10 @@ export function renderApp(
       probeBilibiliPages,
       clearBilibiliLogin,
       installYtDlp,
+      installMediaTools,
       getToolStatus,
+      checkAppUpdate,
+      installAppUpdate,
       listTaskGroups,
       progressPollMs,
       qrPollMs,
@@ -1070,11 +1082,28 @@ function buildSettingsPanel(
       installYtdlp.textContent = idleLabel;
     }
   });
+  const installFfmpeg = element("button", "secondary", "下载 FFmpeg");
+  installFfmpeg.type = "button";
+  installFfmpeg.dataset.testid = "install-media-tools";
+  installFfmpeg.addEventListener("click", async () => {
+    const idleLabel = "下载 FFmpeg";
+    installFfmpeg.setAttribute("aria-busy", "true");
+    installFfmpeg.textContent = "下载中";
+    try {
+      state.settings = await dependencies.installMediaTools();
+      state.toolStatus = await dependencies.getToolStatus();
+      renderApp(root, state, dependencies);
+    } finally {
+      installFfmpeg.removeAttribute("aria-busy");
+      installFfmpeg.textContent = idleLabel;
+    }
+  });
   const ffmpeg = field("ffmpeg 路径", "ffmpeg-path", "dependencies\\ffmpeg\\bin\\ffmpeg.exe");
   ffmpeg.querySelector("input")!.value = state.settings.ffmpegPath ?? "";
   const ffprobe = field("ffprobe 路径", "ffprobe-path", "dependencies\\ffmpeg\\bin\\ffprobe.exe");
   ffprobe.querySelector("input")!.value = state.settings.ffprobePath ?? "";
   const toolStatus = buildToolStatusPanel(state);
+  const updatePanel = buildUpdatePanel(root, state, dependencies);
 
   const engine = element("div", "field");
   engine.dataset.testid = "default-engine";
@@ -1121,10 +1150,104 @@ function buildSettingsPanel(
     installYtdlp,
     ffmpeg,
     ffprobe,
+    installFfmpeg,
     toolStatus,
+    updatePanel,
     save,
   );
   panel.append(settings);
+  return panel;
+}
+
+function buildUpdatePanel(
+  root: HTMLElement,
+  state: AppState,
+  dependencies: Required<RenderDependencies>,
+): HTMLElement {
+  const panel = element("div", "update-panel");
+  panel.dataset.testid = "app-update";
+  panel.append(element("span", "tool-status-title", "应用更新"));
+  panel.append(element("div", "update-version", `当前版本 ${state.update.currentVersion}`));
+
+  const message = updateMessage(state);
+  if (message) {
+    panel.append(element("div", state.update.phase === "error" ? "update-error" : "update-message", message));
+  }
+  if (state.update.notes) {
+    panel.append(element("div", "update-notes", state.update.notes));
+  }
+
+  const actions = element("div", "update-actions");
+  const check = element(
+    "button",
+    "secondary",
+    state.update.phase === "checking" ? "检查中" : "检查更新",
+  );
+  check.type = "button";
+  check.dataset.testid = "check-update";
+  check.disabled = state.update.phase === "checking" || state.update.phase === "installing";
+  check.addEventListener("click", async () => {
+    state.update = {
+      ...state.update,
+      phase: "checking",
+      error: null,
+    };
+    renderApp(root, state, dependencies);
+    try {
+      const status = await dependencies.checkAppUpdate();
+      state.update = {
+        phase: status.available ? "available" : "current",
+        currentVersion: status.currentVersion,
+        latestVersion: status.latestVersion,
+        notes: status.notes,
+        error: null,
+      };
+    } catch (error) {
+      state.update = {
+        ...state.update,
+        phase: "error",
+        error: errorMessage(error),
+      };
+    }
+    renderApp(root, state, dependencies);
+  });
+  actions.append(check);
+
+  if (state.update.phase === "available" || state.update.phase === "installing") {
+    const blocked = hasUnfinishedRuntimeTasks(state);
+    const install = element(
+      "button",
+      "primary",
+      state.update.phase === "installing" ? "正在更新" : "立即更新",
+    );
+    install.type = "button";
+    install.dataset.testid = "install-update";
+    install.disabled = blocked || state.update.phase === "installing";
+    install.addEventListener("click", async () => {
+      state.update = {
+        ...state.update,
+        phase: "installing",
+        error: null,
+      };
+      renderApp(root, state, dependencies);
+      try {
+        await dependencies.installAppUpdate();
+      } catch (error) {
+        state.update = {
+          ...state.update,
+          phase: "error",
+          error: errorMessage(error),
+        };
+        renderApp(root, state, dependencies);
+      }
+    });
+    actions.append(install);
+    if (blocked) {
+      panel.append(element("div", "update-message", "请先暂停或完成下载任务再更新"));
+    }
+  }
+
+  panel.append(actions);
   return panel;
 }
 
@@ -1143,6 +1266,30 @@ function toolStatusItem(name: string, status: string): HTMLElement {
   const item = element("div", "tool-status-item");
   item.append(element("span", "", name), element("strong", "", toolStatusLabel(status)));
   return item;
+}
+
+function updateMessage(state: AppState): string | null {
+  if (state.update.phase === "current") {
+    return "已是最新版本";
+  }
+  if (state.update.phase === "available") {
+    return `发现 ${state.update.latestVersion ?? "新版本"}`;
+  }
+  if (state.update.phase === "installing") {
+    return "正在下载并安装，应用将自动重启";
+  }
+  if (state.update.phase === "error") {
+    return state.update.error ?? "更新失败";
+  }
+  return null;
+}
+
+function hasUnfinishedRuntimeTasks(state: AppState): boolean {
+  return state.taskGroups.some((group) =>
+    group.tasks.some((task) =>
+      ["pending", "probing", "queued", "downloading", "merging"].includes(task.state),
+    ),
+  );
 }
 
 function readInput(root: HTMLElement, testId: string): string {

@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  checkAppUpdate,
   clearBilibiliLogin,
   createTask,
   getConfig,
   getToolStatus,
+  installAppUpdate,
+  installMediaTools,
   installYtDlp,
   listTaskGroups,
   deleteTask,
@@ -391,5 +394,52 @@ describe("api fallback detection", () => {
       defaultEngine: "native",
     });
     expect(invokeMock).toHaveBeenCalledWith("install_ytdlp");
+  });
+
+  test("installs FFmpeg media tools through Tauri command and normalizes config", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      download_root: "D:\\Videos",
+      concurrency: 2,
+      default_engine: "native",
+      ytdlp_path: null,
+      ffmpeg_path: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffmpeg.exe",
+      ffprobe_path:
+        "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffprobe.exe",
+    });
+
+    await expect(installMediaTools()).resolves.toMatchObject({
+      ffmpegPath: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffmpeg.exe",
+      ffprobePath: "C:\\Program Files\\Video Downloader\\dependencies\\ffmpeg\\bin\\ffprobe.exe",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("install_media_tools");
+  });
+
+  test("checks app updates through Tauri command and normalizes status", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue({
+      available: true,
+      current_version: "0.1.0",
+      latest_version: "0.1.1",
+      notes: "修复下载恢复",
+      pub_date: "2026-05-23T00:00:00Z",
+    });
+
+    await expect(checkAppUpdate()).resolves.toEqual({
+      available: true,
+      currentVersion: "0.1.0",
+      latestVersion: "0.1.1",
+      notes: "修复下载恢复",
+      pubDate: "2026-05-23T00:00:00Z",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("check_app_update");
+  });
+
+  test("installs app update through Tauri command", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    invokeMock.mockResolvedValue(undefined);
+
+    await expect(installAppUpdate()).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith("install_app_update");
   });
 });

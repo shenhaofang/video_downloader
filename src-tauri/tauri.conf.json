@@ -23,6 +23,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -30,14 +31,21 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/install-media-tools.ps1",
-      "resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip"
-    ],
     "windows": {
       "nsis": {
         "installMode": "both",
         "installerHooks": "windows/hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5M0NBNERBNEJDNUU5REMKUldUYzZjVkwycVE4dWVTMjIwUXlNTjkrenN4MFRmN3ZCVklveTlEbE43YUd2ZDE4T2hLZWhiSWcK",
+      "endpoints": [
+        "https://github.com/shenhaofang/video_downloader/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

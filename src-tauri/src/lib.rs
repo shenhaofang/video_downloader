@@ -8,12 +8,14 @@ pub mod models;
 pub mod platform;
 pub mod storage;
 pub mod task;
+pub mod updater;
 
 use std::path::PathBuf;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             use tauri::Manager;
 
@@ -39,7 +41,10 @@ pub fn run() {
             commands::poll_bilibili_login,
             commands::clear_bilibili_login,
             commands::install_ytdlp,
-            commands::get_tool_status
+            commands::install_media_tools,
+            commands::get_tool_status,
+            commands::check_app_update,
+            commands::install_app_update
         ])
         .run(tauri::generate_context!())
         .expect("failed to run video downloader");
@@ -68,5 +73,18 @@ mod tests {
 
         assert!(result.is_err());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_registers_updater_plugin_and_commands() {
+        let lib_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs");
+        let text = fs::read_to_string(lib_path).unwrap();
+
+        assert!(text.contains("tauri_plugin_updater::Builder::new().build()"));
+        assert!(text.contains("commands::check_app_update"));
+        assert!(text.contains("commands::install_app_update"));
+        assert!(text.contains("commands::install_media_tools"));
     }
 }
