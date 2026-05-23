@@ -1,7 +1,8 @@
 param(
   [string]$Repo = "shenhaofang/video_downloader",
   [string]$Version = "",
-  [string]$Notes = ""
+  [string]$Notes = "",
+  [string]$AssetName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,7 +28,11 @@ if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
   throw "Updater signature not found: $signaturePath"
 }
 
-$encodedAssetName = [System.Uri]::EscapeDataString($installer.Name)
+if (-not $AssetName) {
+  $AssetName = $installer.Name -replace "\s+", "."
+}
+
+$encodedAssetName = [System.Uri]::EscapeDataString($AssetName)
 $releaseTag = "v$Version"
 $json = [ordered]@{
   version = $Version
