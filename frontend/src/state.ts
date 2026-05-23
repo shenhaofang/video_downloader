@@ -99,6 +99,7 @@ export interface AppState {
   settings: AppSettings;
   platforms: PlatformLoginRow[];
   expandedPlatforms: Set<string>;
+  collapsedTaskGroupIds: Set<string>;
   taskGroups: CreatedTaskGroup[];
   autoRunPausedTaskIds: Set<string>;
   pagePreview: PagePreviewState;
@@ -120,6 +121,7 @@ export function createInitialState(): AppState {
     },
     platforms: [{ platform: "bilibili", status: "未登录" }],
     expandedPlatforms: new Set<string>(),
+    collapsedTaskGroupIds: new Set<string>(),
     taskGroups: [],
     autoRunPausedTaskIds: new Set<string>(),
     pagePreview: emptyPagePreviewState(),
@@ -139,7 +141,7 @@ export function createInitialState(): AppState {
     },
     update: {
       phase: "idle",
-      currentVersion: "0.1.3",
+      currentVersion: "0.1.4",
       latestVersion: null,
       notes: null,
       error: null,

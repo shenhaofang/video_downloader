@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { renderApp } from "./render";
 import { createInitialState, type CreatedTaskGroup } from "./state";
+
+const testDir = dirname(fileURLToPath(import.meta.url));
 
 function createdCollectionFixture(): CreatedTaskGroup {
   return {
@@ -60,6 +65,15 @@ describe("renderApp", () => {
       "设置",
     ]);
     expect(root.querySelector(".boot-screen")).toBeNull();
+  });
+
+  test("keeps the desktop sidebar fixed outside the workspace scroll", () => {
+    const styles = readFileSync(join(testDir, "styles.css"), "utf8");
+
+    expect(styles).toMatch(/\.sidebar\s*{[^}]*position:\s*sticky/s);
+    expect(styles).toMatch(/\.sidebar\s*{[^}]*top:\s*0/s);
+    expect(styles).toMatch(/\.sidebar\s*{[^}]*height:\s*100vh/s);
+    expect(styles).toMatch(/\.sidebar\s*{[^}]*overflow:\s*hidden/s);
   });
 
   test("prefills the output directory input", () => {
@@ -639,6 +653,31 @@ describe("renderApp", () => {
     expect(childStates[2].classList.contains("state-queued")).toBe(true);
     expect(childStates[3].classList.contains("state-downloading")).toBe(true);
     expect(childStates[4].classList.contains("state-paused")).toBe(true);
+  });
+
+  test("keeps a collapsed task group collapsed while a task is downloading", () => {
+    const collection = createdCollectionFixture();
+    collection.group.state = "downloading";
+    collection.tasks = collection.tasks.map((task) => ({
+      ...task,
+      state: task.id === "task-2" ? "downloading" : "completed",
+      bytes_downloaded: task.id === "task-2" ? 50 : 100,
+      bytes_total: 100,
+    }));
+    const state = {
+      ...createInitialState(),
+      taskGroups: [collection],
+    };
+    renderApp(root, state);
+
+    const details = root.querySelector<HTMLDetailsElement>(".task-card details")!;
+    expect(details.open).toBe(true);
+
+    details.open = false;
+    details.dispatchEvent(new Event("toggle"));
+    renderApp(root, state);
+
+    expect(root.querySelector<HTMLDetailsElement>(".task-card details")?.open).toBe(false);
   });
 
   test("shows only applicable child task actions for every state", () => {

@@ -349,6 +349,7 @@ function mergePersistedTaskGroups(state: AppState, persistedGroups: CreatedTaskG
   state.taskGroups = state.taskGroups.map(
     (current) => persistedById.get(current.group.id) ?? current,
   );
+  pruneCollapsedTaskGroups(state);
 }
 
 function renderTaskList(
@@ -580,7 +581,14 @@ function buildTaskGroupCard(
 ): HTMLElement {
   const card = element("article", "task-card");
   const details = document.createElement("details");
-  details.open = true;
+  details.open = !state.collapsedTaskGroupIds.has(created.group.id);
+  details.addEventListener("toggle", () => {
+    if (details.open) {
+      state.collapsedTaskGroupIds.delete(created.group.id);
+    } else {
+      state.collapsedTaskGroupIds.add(created.group.id);
+    }
+  });
   const summary = document.createElement("summary");
   summary.className = "task-group-summary";
   summary.append(
@@ -667,6 +675,7 @@ function buildTaskGroupActions(
         groups = await dependencies.deleteTask({ task_id: task.id });
       }
       state.taskGroups = groups;
+      pruneCollapsedTaskGroups(state);
       renderTaskList(taskList, state, dependencies);
     } catch (error) {
       console.error("Failed to delete task group", error);
@@ -675,6 +684,15 @@ function buildTaskGroupActions(
   });
   actions.append(remove);
   return actions;
+}
+
+function pruneCollapsedTaskGroups(state: AppState): void {
+  const groupIds = new Set(state.taskGroups.map((group) => group.group.id));
+  for (const groupId of state.collapsedTaskGroupIds) {
+    if (!groupIds.has(groupId)) {
+      state.collapsedTaskGroupIds.delete(groupId);
+    }
+  }
 }
 
 function continuableTasks(tasks: DownloadTask[]): DownloadTask[] {
@@ -766,6 +784,7 @@ function buildChildActions(
     childActionButton("删除", `delete-task-${task.id}`, async () => {
       state.autoRunPausedTaskIds.delete(task.id);
       state.taskGroups = await dependencies.deleteTask({ task_id: task.id });
+      pruneCollapsedTaskGroups(state);
       renderTaskList(taskList, state, dependencies);
     }),
   );

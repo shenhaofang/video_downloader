@@ -367,7 +367,7 @@ function fallbackToolStatus(): ToolStatus {
 function fallbackAppUpdateStatus(): AppUpdateStatus {
   return {
     available: false,
-    currentVersion: "0.1.3",
+    currentVersion: "0.1.4",
     latestVersion: null,
     notes: null,
     pubDate: null,

@@ -30,6 +30,10 @@ button {
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
   padding: 18px;
   background: #20242b;
   color: #f8fafc;
@@ -538,6 +542,8 @@ button {
   }
 
   .sidebar {
+    position: static;
+    height: auto;
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
