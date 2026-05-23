@@ -139,7 +139,7 @@ export function createInitialState(): AppState {
     },
     update: {
       phase: "idle",
-      currentVersion: "0.1.1",
+      currentVersion: "0.1.2",
       latestVersion: null,
       notes: null,
       error: null,

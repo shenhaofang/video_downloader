@@ -916,7 +916,7 @@ For each target, Tauri requires the binary filename to include the target triple
 - `ffmpeg-x86_64-pc-windows-msvc.exe`
 - `ffprobe-x86_64-pc-windows-msvc.exe`
 
-Run `rustc --print host-tuple` to discover the current host tuple. Public distribution must verify the bundled FFmpeg license profile before release.
+Run `rustc --print host-tuple` to discover the current host tuple. Public distribution must verify the installer-managed FFmpeg license profile before release.
 ```
 
 - [ ] **Step 3: Export media module**

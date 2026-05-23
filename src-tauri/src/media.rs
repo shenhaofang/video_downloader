@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn tauri_config_uses_updater_and_keeps_media_tools_out_of_app_bundle() {
+    fn tauri_config_keeps_ffmpeg_archive_out_of_app_update_bundle() {
         let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         let text = fs::read_to_string(config_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -455,7 +455,7 @@ mod tests {
         assert!(!resources.contains(&serde_json::json!(
             "resources/vendor/ffmpeg/ffmpeg-win64-lgpl.zip"
         )));
-        assert!(!resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
+        assert!(resources.contains(&serde_json::json!("resources/install-media-tools.ps1")));
         assert_eq!(
             json["plugins"]["updater"]["endpoints"][0],
             serde_json::json!(
@@ -577,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn nsis_hook_leaves_media_tools_to_settings_and_cleans_them_on_uninstall() {
+    fn nsis_hook_ensures_required_media_tools_only_when_missing() {
         let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("windows")
             .join("hooks.nsh");
@@ -585,14 +585,36 @@ mod tests {
 
         assert!(text.contains("!macro NSIS_HOOK_POSTINSTALL"));
         assert!(!text.contains("NSISdl::download"));
-        assert!(!text.contains("-ArchiveUrl"));
+        assert!(text.contains("-ArchiveUrl"));
         assert!(text.contains("SetDetailsView show"));
-        assert!(text.contains("Application dependencies are managed from Settings"));
+        assert!(text.contains("FFmpeg media tools already installed"));
+        assert!(text.contains("Installing required FFmpeg media tools"));
+        assert!(text.contains("powershell.exe -NoProfile -ExecutionPolicy Bypass"));
+        assert!(text.contains("resources\\install-media-tools.ps1"));
+        assert!(text.contains(
+            "https://github.com/shenhaofang/video_downloader/releases/latest/download/ffmpeg-win64-lgpl.zip"
+        ));
         assert!(!text.contains("resources\\vendor\\ffmpeg\\ffmpeg-win64-lgpl.zip"));
-        assert!(!text.contains("install-media-tools.ps1"));
+        assert!(text.contains("$INSTDIR\\dependencies\\ffmpeg"));
+        assert!(text.contains("D3C0D41C26B64BB42ABBF9051A9494BC67185B6D9FA57798F20EFB0E0213CAF7"));
         assert!(text.contains("!macro NSIS_HOOK_PREUNINSTALL"));
         assert!(text.contains("RMDir /r \"$INSTDIR\\dependencies\""));
         assert!(text.contains("DeleteRegKey SHCTX \"${MANUPRODUCTKEY}\""));
+    }
+
+    #[test]
+    fn installer_media_tools_script_downloads_only_when_required() {
+        let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("install-media-tools.ps1");
+        let text = fs::read_to_string(script_path).unwrap();
+
+        assert!(text.contains("[string]$ArchiveUrl"));
+        assert!(text.contains("Required FFmpeg media tools already installed"));
+        assert!(text.contains("Invoke-WebRequest"));
+        assert!(text.contains("Verifying FFmpeg archive"));
+        assert!(text.contains("FFmpeg archive checksum mismatch"));
+        assert!(text.contains("FFmpeg media tools installed"));
     }
 
     #[test]

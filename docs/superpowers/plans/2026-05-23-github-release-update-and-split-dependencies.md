@@ -4,7 +4,7 @@
 
 **Goal:** Add signed GitHub Release application updates while keeping large media dependencies outside app update packages.
 
-**Architecture:** Tauri official updater handles app version checks, signature verification, download, install, and restart. FFmpeg and yt-dlp remain independent install-root dependencies managed by explicit Settings actions. The frontend talks only to local Tauri commands.
+**Architecture:** Tauri official updater handles app version checks, signature verification, download, install, and restart. FFmpeg and yt-dlp remain independent install-root dependencies. FFmpeg is also a required native-engine dependency, so the NSIS installer/update hook ensures it exists after install: existing complete tools are reused, missing tools are downloaded from the pinned release asset. Settings remains the explicit repair/reinstall path. The frontend talks only to local Tauri commands.
 
 **Tech Stack:** Tauri v2, `tauri-plugin-updater`, Rust command wrappers, GitHub Releases static `latest.json`, Vitest, Rust unit tests.
 
@@ -51,7 +51,7 @@
 - [ ] Verify SHA256 before extraction.
 - [ ] Extract into `dependencies\ffmpeg`.
 - [ ] Persist `ffmpeg_path` and `ffprobe_path` in app config.
-- [ ] Simplify NSIS hook so it no longer installs bundled FFmpeg, but still preserves dependency cleanup on uninstall and shortcut icon refresh.
+- [ ] Update NSIS hook so it conditionally ensures required FFmpeg tools after install/update: skip when `ffmpeg.exe` and `ffprobe.exe` already exist, download and verify the pinned release asset when either is missing, preserve dependency cleanup on uninstall and shortcut icon refresh.
 - [ ] Add Rust tests for install path persistence, missing/empty archive failures, and hook/config guards.
 
 ### Task 4: Frontend Settings UI

@@ -2,14 +2,15 @@
 
 ## 目标
 
-应用可以在“设置”页检测 GitHub Releases 是否有新版本，并在有新版本时直接安装更新。更新包只包含应用本体，不再重复携带 FFmpeg 这类大依赖；FFmpeg 和 yt-dlp 作为独立依赖按需下载安装。
+应用可以在“设置”页检测 GitHub Releases 是否有新版本，并在有新版本时直接安装更新。更新包只包含应用本体和小安装脚本，不重复携带 FFmpeg 这类大依赖；FFmpeg 和 yt-dlp 作为独立依赖按需下载安装。
 
 ## 范围
 
 - GitHub 仓库使用公开 release 作为更新源。
 - 应用更新使用 Tauri 官方 updater，启用签名校验和 Windows NSIS updater artifacts。
-- FFmpeg 依赖从 Tauri `bundle.resources` 中移除，避免进入每次应用更新包。
-- Settings 增加“应用更新”和“依赖工具”操作：检查更新、立即更新、下载 yt-dlp、下载 FFmpeg。
+- FFmpeg zip 从 Tauri `bundle.resources` 中移除，避免进入每次应用更新包；安装器只保留小脚本用于按需确保必需依赖。
+- NSIS 安装或升级完成后检查安装目录 `dependencies\ffmpeg`：已有完整 `ffmpeg.exe` / `ffprobe.exe` 时跳过，缺失时下载、校验并安装 FFmpeg。
+- Settings 增加“应用更新”和“依赖工具”操作：检查更新、立即更新、下载 yt-dlp、下载 FFmpeg，用于用户手动修复或重装依赖。
 - 第一版只支持 Windows x64 的 NSIS 更新与 FFmpeg zip 依赖。
 
 ## 不做
@@ -40,6 +41,7 @@ GitHub Release 需要包含：
   - `install_media_tools` 下载 FFmpeg zip，校验 SHA256，解压到安装目录 `dependencies\ffmpeg`，并持久化 `ffmpeg_path` / `ffprobe_path`。
 - 新增 `ErrorCode::UpdateError` 表示更新链路错误。
 - 下载依赖时使用 release asset，不依赖安装器内置资源。
+- 安装器 hook 复用同一 release asset 和 SHA256：已有依赖不下载，缺失依赖必须补齐，否则安装/升级失败。
 
 ## 前端设计
 
@@ -56,6 +58,6 @@ Settings 保持单页：
 
 ## 验证
 
-- Rust 单测覆盖 updater 状态映射、Tauri 配置守卫、FFmpeg zip 安装、命令注册。
+- Rust 单测覆盖 updater 状态映射、Tauri 配置守卫、安装器按需确保 FFmpeg、FFmpeg zip 安装、命令注册。
 - TS 单测覆盖 API invoke/fallback、Settings 更新区、依赖安装按钮、活跃任务禁用更新。
 - 完整验证：`npm run test -- --pool=threads`、`npm run build`、`cargo check`、`cargo clippy -- -D warnings`、`cargo test`、`npm run tauri:build`。
