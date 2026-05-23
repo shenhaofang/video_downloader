@@ -1392,7 +1392,28 @@ function isTerminalLoginPollStatus(status: string): boolean {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (isMessageObject(error)) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    return JSON.stringify(error);
+  }
+  return String(error);
+}
+
+function isMessageObject(error: unknown): error is { message: string } {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string",
+  );
 }
 
 function toolStatusLabel(status: string): string {

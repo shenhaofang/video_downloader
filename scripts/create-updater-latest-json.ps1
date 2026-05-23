@@ -47,5 +47,6 @@ $json = [ordered]@{
 } | ConvertTo-Json -Depth 8
 
 $outputPath = Join-Path $bundleDir "latest.json"
-$json | Set-Content -LiteralPath $outputPath -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($outputPath, $json, $utf8NoBom)
 Write-Output $outputPath

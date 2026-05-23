@@ -1156,6 +1156,23 @@ describe("renderApp", () => {
     });
   });
 
+  test("shows structured update check errors as readable text", async () => {
+    const checkAppUpdate = vi.fn().mockRejectedValue({
+      code: "update_error",
+      message: "无法下载更新元数据",
+    });
+    const state = createInitialState();
+    renderApp(root, state, { checkAppUpdate });
+
+    root.querySelector<HTMLButtonElement>("[data-tab='settings']")?.click();
+    root.querySelector<HTMLButtonElement>("[data-testid='check-update']")?.click();
+
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain("无法下载更新元数据");
+      expect(root.textContent).not.toContain("[object Object]");
+    });
+  });
+
   test("disables update install while queued or running tasks exist", async () => {
     const checkAppUpdate = vi.fn().mockResolvedValue({
       available: true,

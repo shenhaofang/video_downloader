@@ -1,6 +1,6 @@
 [package]
 name = "video-downloader"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local desktop video downloader"
 authors = ["video-downloader"]
 edition = "2021"
